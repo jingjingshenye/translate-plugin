@@ -18,7 +18,7 @@ async function main() {
     },
     options_ui: {
       page: 'dist/options/index.html',
-      open_in_tab: false,
+      open_in_tab: true,
     },
     background: {
       service_worker: 'dist/background/index.mjs',
@@ -37,12 +37,6 @@ async function main() {
         js: ['dist/contentScripts/index.global.js'],
         all_frames: true,
         run_at: 'document_end',
-      },
-    ],
-    web_accessible_resources: [
-      {
-        resources: ['dist/contentScripts/style.css'],
-        matches: ['<all_urls>'],
       },
     ],
     content_security_policy: {

@@ -88,29 +88,28 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 
 <style scoped>
 .app {
-  width: 360px; background: var(--qt-bg); color: var(--qt-text);
-  font-family: 'SF Pro', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  width: 360px; background: #f0f9ff; color: #0c4a6e;
+  font-family: system-ui, sans-serif;
 }
 
 .header {
   display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-  background: linear-gradient(90deg, rgba(56,189,248,0.12), transparent);
-  border-bottom: 1px solid var(--qt-border-light);
+  background: linear-gradient(90deg, rgba(56,189,248,0.1), transparent);
+  border-bottom: 1px solid rgba(56,189,248,0.12);
 }
 .logo {
   width: 26px; height: 26px; border-radius: 6px;
-  background: linear-gradient(135deg, var(--qt-primary), var(--qt-primary-light));
+  background: linear-gradient(135deg, #38bdf8, #7dd3fc);
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 700; color: #fff;
 }
 .title {
   font-size: 11px; font-weight: 700; letter-spacing: 2px;
-  background: linear-gradient(90deg, var(--qt-primary-dark), var(--qt-primary));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  color: #0ea5e9;
 }
 .settings-btn {
   margin-left: auto; background: none; border: none;
-  color: var(--qt-text-light); font-size: 16px; cursor: pointer;
+  color: #64748b; font-size: 16px; cursor: pointer;
   opacity: 0.6; transition: opacity 0.2s; padding: 2px 4px; border-radius: 4px;
 }
 .settings-btn:hover { opacity: 1; background: rgba(56,189,248,0.1); }
@@ -123,29 +122,27 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 .lang-row .sel { flex: 1; }
 
 .sel {
-  padding: 5px 8px; background: var(--qt-bg-input);
-  border: 1px solid var(--qt-border); border-radius: 5px;
-  color: var(--qt-text); font-size: 12px; cursor: pointer; outline: none;
+  padding: 5px 8px; background: #fff;
+  border: 1px solid rgba(56,189,248,0.25); border-radius: 5px;
+  color: #0c4a6e; font-size: 12px; cursor: pointer; outline: none;
 }
-.sel:focus { border-color: var(--qt-primary); }
-.sel option, .sel optgroup { background: var(--qt-bg-card); color: var(--qt-text); }
+.sel:focus { border-color: #38bdf8; }
+.sel option, .sel optgroup { background: #f0f9ff; color: #0c4a6e; }
 
 .swap {
-  cursor: pointer; font-size: 16px;
-  background: linear-gradient(90deg, var(--qt-primary-dark), var(--qt-primary));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  cursor: pointer; font-size: 16px; color: #0ea5e9;
   opacity: 0.7; user-select: none;
 }
 .swap:hover { opacity: 1; }
 
 textarea {
-  width: 100%; padding: 8px 10px; background: var(--qt-bg-input);
-  border: 1px solid var(--qt-border); border-radius: 6px;
-  color: var(--qt-text); font-size: 13px; line-height: 1.5;
+  width: 100%; padding: 8px 10px; background: #fff;
+  border: 1px solid rgba(56,189,248,0.25); border-radius: 6px;
+  color: #0c4a6e; font-size: 13px; line-height: 1.5;
   resize: vertical; font-family: inherit; outline: none;
 }
-textarea:focus { border-color: var(--qt-primary); box-shadow: 0 0 0 2px rgba(56,189,248,0.1); }
-textarea::placeholder { color: var(--qt-text-light); }
+textarea:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.1); }
+textarea::placeholder { color: #64748b; }
 
 .actions { display: flex; gap: 6px; }
 .btn {
@@ -154,30 +151,28 @@ textarea::placeholder { color: var(--qt-text-light); }
   display: flex; align-items: center; justify-content: center;
 }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-clear { background: rgba(56,189,248,0.08); color: var(--qt-primary-dark); }
-.btn-go { background: linear-gradient(135deg, var(--qt-primary-dark), var(--qt-primary)); color: #fff; font-weight: 600; }
-.btn-go:hover:not(:disabled) { box-shadow: 0 0 14px var(--qt-primary-glow); }
+.btn-clear { background: rgba(56,189,248,0.08); color: #0ea5e9; }
+.btn-go { background: linear-gradient(135deg, #0ea5e9, #38bdf8); color: #fff; font-weight: 600; }
+.btn-go:hover:not(:disabled) { box-shadow: 0 0 14px rgba(56,189,248,0.5); }
 
 .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.result { background: var(--qt-bg-input); border: 1px solid var(--qt-border); border-radius: 8px; overflow: hidden; }
+.result { background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 8px; overflow: hidden; }
 .result-bar {
   padding: 6px 10px; display: flex; justify-content: space-between; align-items: center;
-  border-bottom: 1px solid var(--qt-border-light); background: rgba(56,189,248,0.04);
+  border-bottom: 1px solid rgba(56,189,248,0.12); background: rgba(56,189,248,0.04);
 }
 .result-bar span {
-  font-size: 10px; letter-spacing: 1.5px; font-weight: 600;
-  background: linear-gradient(90deg, var(--qt-primary-dark), var(--qt-primary));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  font-size: 10px; letter-spacing: 1.5px; font-weight: 600; color: #0ea5e9;
 }
-.result-bar em { font-style: normal; -webkit-text-fill-color: var(--qt-primary-dark); }
+.result-bar em { font-style: normal; color: #38bdf8; }
 .copy-btn {
-  padding: 2px 8px; font-size: 10px; border: 1px solid var(--qt-border);
-  background: transparent; color: var(--qt-primary-dark); border-radius: 4px; cursor: pointer;
+  padding: 2px 8px; font-size: 10px; border: 1px solid rgba(56,189,248,0.25);
+  background: transparent; color: #0ea5e9; border-radius: 4px; cursor: pointer;
 }
 .copy-btn:hover { background: rgba(56,189,248,0.1); }
-.result-text { padding: 10px; color: var(--qt-text); line-height: 1.6; max-height: 180px; overflow-y: auto; word-break: break-all; }
+.result-text { padding: 10px; color: #0c4a6e; line-height: 1.6; max-height: 180px; overflow-y: auto; word-break: break-all; }
 
 .error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; }
 </style>

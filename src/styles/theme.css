@@ -12,15 +12,13 @@
   --qt-border-light: rgba(56, 189, 248, 0.12);
 }
 
-/* 全局 reset */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; background: var(--qt-bg-card); }
+html, body { height: 100%; }
 body {
   font-family: 'SF Pro', 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* 滚动条 */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--qt-border); border-radius: 2px; }

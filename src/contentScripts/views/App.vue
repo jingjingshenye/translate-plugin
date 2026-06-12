@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import '~/styles/theme.css'
 import { translateWithFallback, FREE_TRANSLATORS, ALL_TRANSLATORS, detectLang, getTargetLang } from '~/logic/translate'
 
 const isOpen = ref(false)
@@ -17,27 +16,9 @@ const apiKeys = ref<Record<string, string>>({})
 let selectionRect: DOMRect | null = null
 let controller: AbortController | null = null
 
-// 读取设置（参考 useWebExtensionStorage 跨上下文同步模式）
-async function loadSettings() {
-  try {
-    const result = await chrome.storage.local.get(['qt_api', 'qt_api_keys'])
-    if (result.qt_api) currentApi.value = result.qt_api
-    if (result.qt_api_keys) apiKeys.value = result.qt_api_keys
-  } catch {}
-}
-loadSettings()
-
-// 监听设置变更（从 popup/options 页面同步过来）
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.qt_api) currentApi.value = changes.qt_api.newValue
-  if (changes.qt_api_keys) apiKeys.value = changes.qt_api_keys.newValue
-})
-
 function onMouseUp(e: MouseEvent) {
   if (isOpen.value) return
   if (e.button !== 0) return
-  const t = e.target as Element
-  if (t?.closest?.('[data-qt]')) return
 
   setTimeout(() => {
     const sel = window.getSelection()
@@ -59,6 +40,10 @@ function onMouseUp(e: MouseEvent) {
   }, 100)
 }
 
+function onMousedown(e: MouseEvent) {
+  if (!isInsideQt(e)) isOpen.value = false
+}
+
 function onIconClick(e: MouseEvent) {
   e.stopPropagation()
   if (!sourceText.value) return
@@ -72,9 +57,9 @@ function onIconClick(e: MouseEvent) {
     const spaceBelow = window.innerHeight - selectionRect.bottom
     const spaceAbove = selectionRect.top
     if (spaceBelow >= 200 || spaceBelow >= spaceAbove) {
-      py = selectionRect.bottom + 2
+      py = Math.min(selectionRect.bottom + 2, window.innerHeight - 370)
     } else {
-      py = Math.max(8, selectionRect.top - 360 - 2)
+      py = Math.max(8, selectionRect.top - 362)
     }
   }
 
@@ -114,12 +99,17 @@ function closePopup() {
 
 function copyText() { navigator.clipboard.writeText(translatedText.value) }
 
-function onMousedown(e: MouseEvent) {
-  if (!(e.target as Element)?.closest?.('[data-qt]')) isOpen.value = false
+// 点击外部关闭
+function onDocMousedown(e: MouseEvent) {
+  if (!isOpen.value) return
+  const t = e.target as Element
+  if (!t?.closest?.('[data-qt-popup]') && !t?.closest?.('[data-qt-icon]')) {
+    closePopup()
+  }
 }
 
 document.addEventListener('mouseup', onMouseUp)
-document.addEventListener('mousedown', onMousedown)
+document.addEventListener('mousedown', onDocMousedown)
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopup() })
 </script>
 
@@ -166,100 +156,3 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopup
   </div>
 </template>
 
-<style scoped>
-.qt-icon {
-  all: initial;
-  position: fixed; z-index: 2147483647;
-  width: 24px; height: 24px; border-radius: 5px;
-  background: linear-gradient(135deg, var(--qt-primary), var(--qt-primary-light));
-  color: #fff; display: flex; align-items: center; justify-content: center;
-  cursor: pointer; font-size: 12px; font-weight: 700;
-  font-family: system-ui, sans-serif;
-  box-shadow: 0 0 10px var(--qt-primary-glow), 0 2px 6px rgba(0,0,0,0.15);
-  transition: all 0.15s; user-select: none;
-}
-.qt-icon:hover {
-  transform: scale(1.15);
-  box-shadow: 0 0 18px var(--qt-primary-glow), 0 4px 10px rgba(0,0,0,0.2);
-}
-
-.qt-popup {
-  all: initial;
-  position: fixed; z-index: 2147483647;
-  width: 340px; max-width: 90vw; max-height: 360px;
-  background: var(--qt-bg-card);
-  border: 1px solid var(--qt-border);
-  border-radius: 8px; overflow: hidden;
-  font-family: system-ui, sans-serif;
-  box-shadow: 0 4px 20px rgba(56,189,248,0.15), 0 6px 24px rgba(0,0,0,0.08);
-}
-
-.qt-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 12px; margin: 0;
-  background: linear-gradient(90deg, rgba(56,189,248,0.1), transparent);
-  border-bottom: 1px solid var(--qt-border-light);
-}
-
-.qt-title {
-  font-size: 12px; font-weight: 700; letter-spacing: 1px; margin: 0; padding: 0;
-  background: linear-gradient(90deg, var(--qt-primary-dark), var(--qt-primary));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}
-
-.qt-header-actions {
-  display: flex; align-items: center; gap: 6px; margin: 0; padding: 0;
-}
-
-.qt-copy-btn {
-  padding: 2px 8px; font-size: 12px; margin: 0;
-  border: 1px solid var(--qt-border);
-  background: transparent; color: var(--qt-primary-dark);
-  border-radius: 3px; cursor: pointer; transition: all 0.15s;
-}
-.qt-copy-btn:hover { background: rgba(56,189,248,0.1); }
-
-.qt-close {
-  color: var(--qt-text-light); cursor: pointer; margin: 0; padding: 0;
-  font-size: 14px; line-height: 1; transition: color 0.15s;
-}
-.qt-close:hover { color: #ef4444; }
-
-.qt-body { padding: 8px 12px 10px; margin: 0; }
-
-.qt-label {
-  color: var(--qt-text-light); font-size: 12px; margin: 0 0 3px; padding: 0;
-  text-transform: uppercase; letter-spacing: 0.5px;
-}
-.qt-label-accent { color: var(--qt-primary-dark); }
-
-.qt-source {
-  color: var(--qt-text); font-size: 12px; font-weight: 400; margin: 0 0 6px; padding: 0;
-  line-height: 1.4; max-height: 60px; overflow-y: auto;
-  word-break: break-all;
-}
-
-.qt-divider { border-top: 1px solid var(--qt-border-light); margin: 0; padding: 6px 0 0; }
-
-.qt-loading {
-  display: flex; align-items: center; gap: 6px; padding: 4px 0; margin: 0;
-  color: var(--qt-primary-dark); font-size: 12px;
-}
-
-.qt-spinner {
-  width: 12px; height: 12px; margin: 0; padding: 0;
-  border: 2px solid var(--qt-border-light);
-  border-top-color: var(--qt-primary-dark);
-  border-radius: 50%;
-  animation: qt-spin 0.7s linear infinite;
-  display: inline-block;
-}
-@keyframes qt-spin { to { transform: rotate(360deg); } }
-
-.qt-error { color: #dc2626; font-size: 12px; padding: 4px 0; margin: 0; }
-
-.qt-result {
-  color: var(--qt-text); font-size: 12px; font-weight: 400; line-height: 1.5; margin: 0; padding: 0;
-  max-height: 200px; overflow-y: auto; word-break: break-all;
-}
-</style>
