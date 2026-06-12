@@ -1,0 +1,27 @@
+:root {
+  --qt-primary: #38bdf8;
+  --qt-primary-dark: #0ea5e9;
+  --qt-primary-light: #7dd3fc;
+  --qt-primary-glow: rgba(56, 189, 248, 0.5);
+  --qt-bg: #e0f2fe;
+  --qt-bg-card: #f0f9ff;
+  --qt-bg-input: #fff;
+  --qt-text: #0c4a6e;
+  --qt-text-light: #64748b;
+  --qt-border: rgba(56, 189, 248, 0.25);
+  --qt-border-light: rgba(56, 189, 248, 0.12);
+}
+
+/* 全局 reset */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--qt-bg-card); }
+body {
+  font-family: 'SF Pro', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--qt-border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--qt-primary); }
