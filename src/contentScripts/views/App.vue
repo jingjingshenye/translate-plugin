@@ -107,16 +107,19 @@ function getCaretPosition(element: HTMLInputElement | HTMLTextAreaElement, offse
 // ============================================
 
 function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaElement | null {
-  // 直接检查 event.target（mouseup 时 target 就是用户松开鼠标的元素）
   const target = event.target as HTMLElement
   if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return target as HTMLInputElement | HTMLTextAreaElement
-  // composedPath() 兜底：处理 Shadow DOM 内的 input
   try {
     for (const el of event.composedPath()) {
       const tag = (el as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return el as HTMLInputElement | HTMLTextAreaElement
     }
   } catch {}
+  // activeElement 穿透 shadow root（Chrome 扩展 composedPath 可能不可靠）
+  let active: Element | null = document.activeElement
+  while (active?.shadowRoot) active = active.shadowRoot.activeElement
+  if (active && ((active as HTMLElement).tagName === 'INPUT' || (active as HTMLElement).tagName === 'TEXTAREA'))
+    return active as HTMLInputElement | HTMLTextAreaElement
   return null
 }
 
