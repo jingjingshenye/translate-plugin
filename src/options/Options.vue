@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useStorage } from '~/composables/useStorage'
 import { useFavorites } from '~/composables/useFavorites'
-import { FREE_TRANSLATORS, AI_TRANSLATORS, ALL_TRANSLATORS } from '~/logic/translate'
+import { FREE_TRANSLATORS, SUBSCRIBE_TRANSLATORS, AI_TRANSLATORS, ALL_TRANSLATORS } from '~/logic/translate'
 
 // 设置
 const api = useStorage<string>('qt_api', 'microsoft')
@@ -101,6 +101,7 @@ function download(content: string, name: string, type: string) {
             <label>引擎</label>
             <select v-model="api">
               <optgroup label="免费"><option v-for="t in FREE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="订阅源（需Key）"><option v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
               <optgroup label="AI（需Key）"><option v-for="t in AI_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
               <option value="custom">自定义 API</option>
             </select>
@@ -116,8 +117,20 @@ function download(content: string, name: string, type: string) {
         </section>
 
         <section class="card">
-          <h2>API 密钥配置</h2>
-          <p class="hint" style="margin-bottom:12px">配置 AI 翻译引擎的 API Key，密钥仅存储在本地</p>
+          <h2>订阅源 API Key</h2>
+          <p class="hint" style="margin-bottom:12px">传统翻译接口，按量付费，翻译质量稳定</p>
+          <div v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" class="api-row">
+            <label>{{ t.name }}</label>
+            <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
+              @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
+              @focus="editingApi = t.id" @blur="editingApi = ''"
+              :placeholder="t.id === 'tencent_official' ? 'SecretId:SecretKey' : t.id === 'baidu_official' ? 'AppID:密钥' : 'API Key'" />
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>AI 翻译 API Key</h2>
+          <p class="hint" style="margin-bottom:12px">大语言模型翻译，支持上下文理解，适合复杂文本</p>
           <div v-for="t in AI_TRANSLATORS" :key="t.id" class="api-row">
             <label>{{ t.name }}</label>
             <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"

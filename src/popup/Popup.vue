@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { translateWithFallback, FREE_TRANSLATORS, ALL_TRANSLATORS, detectLang, getTargetLang } from '~/logic/translate'
+import { translateWithFallback, FREE_TRANSLATORS, SUBSCRIBE_TRANSLATORS, AI_TRANSLATORS, ALL_TRANSLATORS, detectLang, getTargetLang } from '~/logic/translate'
 import { useStorage } from '~/composables/useStorage'
 import { isValidWord, lookupDict, localDict, bingDict, type DictResult } from '~/logic/dict'
 
@@ -86,7 +86,8 @@ function openOptions() { chrome.runtime.openOptionsPage() }
     <div class="body">
       <select v-model="currentApi" class="sel api-sel">
         <optgroup label="免费"><option v-for="t in FREE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
-        <optgroup label="AI"><option v-for="t in ALL_TRANSLATORS.filter(t => t.needKey)" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="订阅"><option v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="AI"><option v-for="t in AI_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
       </select>
 
       <div class="lang-row">

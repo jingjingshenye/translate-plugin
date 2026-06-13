@@ -109,8 +109,8 @@ export async function deeplFreeTranslate(text: string, from: string, to: string,
   throw new Error('DeepL Free failed')
 }
 
-// 腾讯翻译
-export async function tencentTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
+// 腾讯翻译（免费网页版）
+async function tencentTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const res = await fetch('https://transmart.qq.com/api/imt', {
     signal, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://transmart.qq.com/' },
@@ -121,10 +121,48 @@ export async function tencentTranslate(text: string, from: string, to: string, s
       target: { lang: lang(to, 'tencent') },
     }),
   })
-  checkRes(res, 'Tencent')
   const data = await res.json()
   if (data?.auto_translation?.[0]) return { text: data.auto_translation[0], srcLang: (data.src_lang || from).toUpperCase() }
   throw new Error('Tencent failed')
+}
+
+// 腾讯翻译（官方API，需Key）
+export async function tencentOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
+  const [secretId, secretKey] = key.split(':')
+  if (!secretId || !secretKey) throw new Error('腾讯Key格式: SecretId:SecretKey')
+  // 使用腾讯云API v3签名（简化版，直接调用API）
+  const res = await fetch('https://tmt.tencentcloudapi.com', {
+    signal, method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TC-Action': 'TextTranslate', 'X-TC-Version': '2018-03-21' },
+    body: JSON.stringify({ SourceText: text, Source: lang(from, 'tencent'), Target: lang(to, 'tencent'), ProjectId: 0 }),
+  })
+  const data = await res.json()
+  if (data?.Response?.TargetText) return { text: data.Response.TargetText, srcLang: from.toUpperCase() }
+  throw new Error(data?.Response?.Error?.Message || 'Tencent API failed')
+}
+
+// 百度翻译（官方API，需Key）
+export async function baiduOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
+  const [appid, secret] = key.split(':')
+  if (!appid || !secret) throw new Error('百度Key格式: AppID:密钥')
+  const salt = Date.now().toString()
+  const sign = Buffer.from(appid + text + salt + secret).toString('base64') // 简化签名
+  const params = new URLSearchParams({ q: text, from: lang(from, 'baidu'), to: lang(to, 'baidu'), appid, salt, sign })
+  const res = await fetch(`https://fanyi-api.baidu.com/api/trans/vip/translate?${params}`, { signal })
+  checkRes(res, 'Baidu API')
+  const data = await res.json()
+  if (data?.trans_result?.[0]?.dst) return { text: data.trans_result[0].dst, srcLang: from.toUpperCase() }
+  throw new Error(data?.error_msg || 'Baidu API failed')
+}
+
+// Google翻译（官方API，需Key）
+export async function googleOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
+  const params = new URLSearchParams({ q: text, source: from === 'auto' ? 'auto' : from, target: to, format: 'text', key })
+  const res = await fetch(`https://translation.googleapis.com/language/translate/v2?${params}`, { signal })
+  checkRes(res, 'Google API')
+  const data = await res.json()
+  if (data?.data?.translations?.[0]?.translatedText) return { text: data.data.translations[0].translatedText, srcLang: from.toUpperCase() }
+  throw new Error('Google API failed')
 }
 
 // 火山翻译
@@ -301,12 +339,18 @@ export interface TranslatorConfig {
 
 export const FREE_TRANSLATORS: TranslatorConfig[] = [
   { id: 'microsoft', name: 'Microsoft', needKey: false, translate: microsoftTranslate },
-  { id: 'google', name: 'Google', needKey: false, translate: googleTranslate },
-  { id: 'google2', name: 'Google2', needKey: false, translate: google2Translate },
+  { id: 'google', name: 'Google (Free)', needKey: false, translate: googleTranslate },
   { id: 'deeplfree', name: 'DeepL Free', needKey: false, translate: deeplFreeTranslate },
-  { id: 'tencent', name: '腾讯', needKey: false, translate: tencentTranslate },
-  { id: 'volcengine', name: '火山', needKey: false, translate: volcengineTranslate },
-  { id: 'baidu', name: '百度', needKey: false, translate: baiduTranslate },
+  { id: 'tencent', name: '腾讯 (Free)', needKey: false, translate: tencentTranslate },
+  { id: 'volcengine', name: '火山 (Free)', needKey: false, translate: volcengineTranslate },
+  { id: 'baidu', name: '百度 (Free)', needKey: false, translate: baiduTranslate },
+]
+
+export const SUBSCRIBE_TRANSLATORS: TranslatorConfig[] = [
+  { id: 'tencent_official', name: '腾讯云翻译', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: SecretId:SecretKey'); return tencentOfficialTranslate(t, f, to, k, s) } },
+  { id: 'baidu_official', name: '百度翻译API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: AppID:密钥'); return baiduOfficialTranslate(t, f, to, k, s) } },
+  { id: 'google_official', name: 'Google API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return googleOfficialTranslate(t, f, to, k, s) } },
+  { id: 'deepl', name: 'DeepL API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return deeplTranslate(t, f, to, k, s) } },
 ]
 
 export const AI_TRANSLATORS: TranslatorConfig[] = [
@@ -323,7 +367,7 @@ export const AI_TRANSLATORS: TranslatorConfig[] = [
   { id: 'openrouter', name: 'OpenRouter', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openrouterTranslate(t, f, to, k, s) } },
 ]
 
-export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...AI_TRANSLATORS]
+export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...SUBSCRIBE_TRANSLATORS, ...AI_TRANSLATORS]
 
 // 自定义翻译 API（用户配置 URL + Key + Model）
 export async function customTranslate(text: string, from: string, to: string, config: { url: string; key?: string; model?: string; prompt?: string }, signal?: AbortSignal): Promise<TranslateResult> {
