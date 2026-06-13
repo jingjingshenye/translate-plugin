@@ -1,64 +1,74 @@
-# Quick Translate - 浏览器翻译插件
+# Quick Translate
 
-一个简洁高效的浏览器翻译插件，支持划词翻译和弹窗翻译。
+划词翻译 + 弹窗翻译 Chrome 浏览器插件。
 
-## 功能特性
+## 功能
 
-- **划词翻译**: 选中文本后出现翻译图标，点击即可翻译
-- **弹窗翻译**: 点击浏览器插件图标，打开翻译面板输入文本翻译
-- **多语言支持**: 支持中文、英文、日语、韩语、法语、德语、西班牙语、俄语
-- **免费API**: 使用Google Translate免费API，无需申请密钥
+- **划词翻译** — 选中文字后出现翻译图标，点击查看翻译和词典释义
+- **弹窗翻译** — 点击插件图标，输入文本翻译
+- **18 种翻译源** — 免费: Microsoft / Google / Tencent / Volcengine / Baidu / DeepL Free; AI: DeepSeek / OpenAI / Gemini / Claude 等
+- **本地词典** — 内置 ECDICT 15000 词 + 18789 词形映射，瞬间查词，支持词形还原
+- **在线词典** — Bing / 有道词典补充音标、例句、双解
+- **生词本** — 收藏单词，支持导出 TXT/CSV/JSON、导入、搜索
+- **设置页面** — 翻译源选择、API Key 配置、词典模式切换
 
-## 安装使用
+## 安装
 
-### 开发模式
+### 下载 Release
+
+1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.0.0.tar.gz`
+2. 解压
+3. Chrome 打开 `chrome://extensions/`
+4. 开启「开发者模式」
+5. 点击「加载已解压的扩展程序」，选择解压后的 `extension` 文件夹
+
+### 从源码构建
 
 ```bash
-# 安装依赖
+git clone https://github.com/jingjingshenye/translate-plugin.git
+cd translate-plugin
 npm install
 
-# 开发调试
-npm run dev
+# 生成词典（需要 ecdict.csv，从 ECDICT 项目下载放到根目录）
+npm run dict
 
-# 构建扩展
+# 构建
 npm run build
 ```
 
-### 安装到浏览器
-
-1. 运行 `npm run build` 构建扩展
-2. 打开 Chrome 浏览器，进入 `chrome://extensions/`
-3. 开启「开发者模式」
-4. 点击「加载已解压的扩展程序」
-5. 选择 `dist` 目录
+构建产物在 `extension/` 目录。
 
 ## 项目结构
 
 ```
-translate-plugin/
-├── public/
-│   ├── manifest.json      # 扩展配置文件
-│   ├── background.js      # 后台服务
-│   ├── content.js         # 内容脚本（划词翻译）
-│   ├── popup.html         # 弹窗页面
-│   └── icons/             # 扩展图标
 ├── src/
-│   └── popup/
-│       ├── main.js        # 弹窗入口
-│       └── App.vue        # 弹窗组件
-├── vite.config.js         # Vite 配置
-└── package.json
+│   ├── contentScripts/     # 内容脚本（划词翻译弹窗）
+│   ├── popup/              # 插件弹窗面板
+│   ├── options/            # 设置页面
+│   ├── background/         # 后台 Service Worker
+│   ├── logic/              # 核心逻辑（翻译、词典）
+│   ├── composables/        # Vue 组合式函数
+│   └── styles/             # 主题变量
+├── scripts/                # 构建脚本（manifest、词典生成、图标）
+├── extension/              # 构建产物（加载此目录）
+└── ecdict.csv              # ECDICT 词典源文件（需自行下载）
 ```
-
-## 翻译API
-
-本插件使用 Google Translate 免费API：
-- 接口: `https://translate.googleapis.com/translate_a/single`
-- 无需API密钥
-- 支持自动语言检测
 
 ## 技术栈
 
-- Vue 3
-- Vite
+- Vue 3 + TypeScript
+- Vite 5
 - Chrome Extension Manifest V3
+
+## 词典
+
+本地词典基于 [ECDICT](https://github.com/skywind3000/ECDICT)（MIT 协议），通过 `scripts/build-dict.mjs` 从 CSV 提取高频词条并生成词形映射。
+
+词典查询流程：
+1. 本地词典（瞬间响应）
+2. 异步补充 Bing / 有道在线数据（音标、例句、发音）
+3. 支持词形还原：`credits → credit`、`went → go`、`redeemable → redeem`
+
+## 许可
+
+MIT
