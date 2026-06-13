@@ -38,6 +38,7 @@ const selHideBtn = ref(false)
 // 输入框翻译设置
 const inputEnabled = ref(false)
 const inputTrigger = ref('/')
+const customApi = ref({ url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 
 let selectionRect: DOMRect | null = null
 let controller: AbortController | null = null
@@ -49,13 +50,14 @@ let hoverTimer: ReturnType<typeof setTimeout> | null = null
 async function loadSettings() {
   try {
     const r = await chrome.storage.local.get([
-      'qt_api', 'qt_api_keys', 'qt_dict_mode',
+      'qt_api', 'qt_api_keys', 'qt_dict_mode', 'qt_custom_api',
       'qt_sel_enabled', 'qt_sel_trigger', 'qt_sel_hide_btn',
       'qt_input_enabled', 'qt_input_trigger',
     ])
     if (r.qt_api) currentApi.value = r.qt_api
     if (r.qt_api_keys) apiKeys.value = r.qt_api_keys
     if (r.qt_dict_mode) dictMode.value = r.qt_dict_mode
+    if (r.qt_custom_api) customApi.value = r.qt_custom_api
     if (r.qt_sel_enabled !== undefined) selEnabled.value = r.qt_sel_enabled
     if (r.qt_sel_trigger) selTrigger.value = r.qt_sel_trigger
     if (r.qt_sel_hide_btn !== undefined) selHideBtn.value = r.qt_sel_hide_btn
@@ -176,7 +178,7 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
   const target = overrideTo || transTo.value || getTargetLang(src)
   // 只在自动检测时更新 transFrom 显示
   if (transFrom.value === 'auto') transFrom.value = src
-  const translatePromise = translateWithFallback(text, src, target, signal, currentApi.value, apiKeys.value[currentApi.value])
+  const translatePromise = translateWithFallback(text, src, target, signal, currentApi.value, apiKeys.value[currentApi.value], customApi.value)
     .then(result => {
       if (!signal.aborted) {
         translatedText.value = result.text
@@ -271,7 +273,7 @@ function setupInputTranslation() {
       const targetLang = getTargetLang(src)
       target.value = text
       target.dispatchEvent(new Event('input', { bubbles: true }))
-      translateWithFallback(text, src, targetLang, undefined, currentApi.value, apiKeys.value[currentApi.value])
+      translateWithFallback(text, src, targetLang, undefined, currentApi.value, apiKeys.value[currentApi.value], customApi.value)
         .then(result => { target.value = result.text; target.dispatchEvent(new Event('input', { bubbles: true })) })
         .catch(() => {})
     }

@@ -16,6 +16,7 @@ const toLang = useStorage<string>('qt_to', 'zh')
 const currentApi = useStorage<string>('qt_api', 'microsoft')
 const apiKeys = useStorage<Record<string, string>>('qt_api_keys', {})
 const dictMode = useStorage<string>('qt_dict_mode', 'local')
+const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 
 // 词典
 const isWord = ref(false)
@@ -47,7 +48,7 @@ async function doTranslate() {
   let from = fromLang.value, to = toLang.value
   if (from === 'auto') { from = detectLang(text); to = getTargetLang(from) }
 
-  const translatePromise = translateWithFallback(text, from, to, undefined, currentApi.value, apiKeys.value[currentApi.value])
+  const translatePromise = translateWithFallback(text, from, to, undefined, currentApi.value, apiKeys.value[currentApi.value], customApi.value)
     .then(res => { result.value = res.text; detectedSrc.value = res.srcLang; usedApi.value = res.api || currentApi.value })
     .catch(() => { error.value = '翻译失败' })
     .finally(() => { loading.value = false })

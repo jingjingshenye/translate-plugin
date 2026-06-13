@@ -325,6 +325,39 @@ export const AI_TRANSLATORS: TranslatorConfig[] = [
 
 export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...AI_TRANSLATORS]
 
+// 自定义翻译 API（用户配置 URL + Key + Model）
+export async function customTranslate(text: string, from: string, to: string, config: { url: string; key?: string; model?: string; prompt?: string }, signal?: AbortSignal): Promise<TranslateResult> {
+  const { url, key, model, prompt } = config
+  if (!url) throw new Error('Custom API URL required')
+
+  const fromName = from === 'auto' ? 'auto-detected' : from
+  const toName = to
+  const systemPrompt = prompt || `You are a translator. Translate from ${fromName} to ${toName}. Output ONLY the translated text.`
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (key) headers['Authorization'] = `Bearer ${key}`
+
+  const body: Record<string, any> = {
+    model: model || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: text },
+    ],
+    temperature: 0.3,
+    stream: false,
+  }
+
+  const res = await fetch(url, {
+    signal, method: 'POST', headers,
+    body: JSON.stringify(body),
+  })
+  checkRes(res, 'Custom API')
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || data?.result?.translated_text || data?.text
+  if (content) return { text: content.trim(), srcLang: from.toUpperCase() }
+  throw new Error('Custom API failed')
+}
+
 // ============================================
 // 统一翻译入口
 // ============================================
@@ -349,14 +382,20 @@ export async function translateText(
   signal?: AbortSignal,
   apiId = 'microsoft',
   apiKey?: string,
+  customConfig?: { url: string; key?: string; model?: string; prompt?: string },
 ): Promise<TranslateResult> {
   const key = cacheKey(text, from, to, apiId)
   const cached = cacheGet(key)
   if (cached) return cached
 
-  const translator = ALL_TRANSLATORS.find(t => t.id === apiId) || FREE_TRANSLATORS[0]
-  const result = await translator.translate(text, from, to, apiKey, signal)
-  result.api = translator.id
+  let result: TranslateResult
+  if (apiId === 'custom' && customConfig) {
+    result = await customTranslate(text, from, to, customConfig, signal)
+  } else {
+    const translator = ALL_TRANSLATORS.find(t => t.id === apiId) || FREE_TRANSLATORS[0]
+    result = await translator.translate(text, from, to, apiKey, signal)
+  }
+  result.api = apiId
 
   cacheSet(key, result)
   return result
@@ -370,13 +409,14 @@ export async function translateWithFallback(
   signal?: AbortSignal,
   apiId = 'microsoft',
   apiKey?: string,
+  customConfig?: { url: string; key?: string; model?: string; prompt?: string },
 ): Promise<TranslateResult> {
   const key = cacheKey(text, from, to, apiId + '_fb')
   const cached = cache.get(key)
   if (cached) return cached
 
   try {
-    const result = await translateText(text, from, to, signal, apiId, apiKey)
+    const result = await translateText(text, from, to, signal, apiId, apiKey, customConfig)
     cacheSet(key, result)
     return result
   } catch {}

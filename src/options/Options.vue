@@ -9,7 +9,15 @@ const api = useStorage<string>('qt_api', 'microsoft')
 const fromLang = useStorage<string>('qt_from', 'auto')
 const toLang = useStorage<string>('qt_to', 'zh')
 const apiKeys = useStorage<Record<string, string>>('qt_api_keys', {})
-const dictMode = useStorage<string>('qt_dict_mode', 'local')  // local | online | both
+const dictMode = useStorage<string>('qt_dict_mode', 'local')
+
+// 自定义 API 配置
+const customApi = useStorage('qt_custom_api', {
+  url: '',
+  key: '',
+  model: 'gpt-4o-mini',
+  prompt: '',
+})
 
 // 收藏
 const { list: favList, count: favCount, toggle: toggleFav, clear: clearFavs, exportList, importList } = useFavorites()
@@ -34,15 +42,15 @@ const editingWord = ref('')
 const editTranslation = ref('')
 
 const stats = computed(() => {
-  const entries = Object.entries(favList.value || {})
+  const entries = favList.value || []
   const today = new Date().toDateString()
   return { total: entries.length, today: entries.filter(([, d]) => new Date(d.createdAt).toDateString() === today).length, withTrans: entries.filter(([, d]) => d.translation).length }
 })
 
 const filteredWords = computed(() => {
-  let entries = Object.entries(favList.value || {})
+  let entries = favList.value || []
   if (searchQuery.value.trim()) { const q = searchQuery.value.toLowerCase(); entries = entries.filter(([w, d]) => w.toLowerCase().includes(q) || (d.translation || '').toLowerCase().includes(q)) }
-  return sortBy.value === 'alpha' ? entries.sort((a, b) => a[0].localeCompare(b[0])) : entries
+  return sortBy.value === 'alpha' ? [...entries].sort((a, b) => a[0].localeCompare(b[0])) : entries
 })
 
 function removeWord(word: string) { toggleFav(word) }
@@ -94,6 +102,7 @@ function download(content: string, name: string, type: string) {
             <select v-model="api">
               <optgroup label="免费"><option v-for="t in FREE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
               <optgroup label="AI（需Key）"><option v-for="t in AI_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <option value="custom">自定义 API</option>
             </select>
           </div>
           <div class="row">
@@ -117,6 +126,27 @@ function download(content: string, name: string, type: string) {
               :placeholder="t.name + ' API Key'" />
           </div>
         </section>
+
+        <section class="card">
+          <h2>自定义 API</h2>
+          <p class="hint" style="margin-bottom:12px">配置自定义翻译接口（OpenAI 兼容格式）</p>
+          <div class="row">
+            <label>接口地址</label>
+            <input v-model="customApi.url" type="text" placeholder="https://your-api.com/v1/chat/completions" />
+          </div>
+          <div class="row">
+            <label>API Key</label>
+            <input v-model="customApi.key" type="password" placeholder="可选" />
+          </div>
+          <div class="row">
+            <label>模型</label>
+            <input v-model="customApi.model" type="text" placeholder="gpt-4o-mini" />
+          </div>
+          <div class="row">
+            <label>Prompt</label>
+            <input v-model="customApi.prompt" type="text" placeholder="自定义系统提示词（可选）" />
+          </div>
+        </section>
       </template>
 
       <!-- ==================== 词典设置 ==================== -->
@@ -128,7 +158,7 @@ function download(content: string, name: string, type: string) {
               <div class="dict-icon">📚</div>
               <div class="dict-info">
                 <div class="dict-name">本地词典</div>
-                <div class="dict-desc">内置 50000 常用词，瞬间响应，无需网络</div>
+                <div class="dict-desc">内置 15000 高频词 + 18789 词形映射，瞬间响应，无需网络</div>
               </div>
               <div class="dict-check" v-if="dictMode === 'local'">✓</div>
             </label>
@@ -157,7 +187,7 @@ function download(content: string, name: string, type: string) {
             <div class="source-item">
               <span class="source-badge local">本地</span>
               <span class="source-name">ECDICT 词典</span>
-              <span class="source-detail">50000 词 · 音标 · 释义 · 词性 · 时态变形</span>
+              <span class="source-detail">15000 词 · 音标 · 释义 · 词性 · 时态变形</span>
             </div>
             <div class="source-item">
               <span class="source-badge online">网络</span>
