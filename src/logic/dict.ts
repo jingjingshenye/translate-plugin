@@ -30,10 +30,11 @@ async function loadDict(): Promise<LocalDict> {
     try {
       const url = chrome.runtime.getURL('dict/dict.json')
       const res = await fetch(url)
-      _dictCache = await res.json()
+      const text = await res.text()
+      _dictCache = JSON.parse(text)
       return _dictCache!
     } catch (e) {
-      console.error('[QT] Failed to load local dict:', e)
+      console.warn('[QT] Failed to load local dict:', e)
       _dictCache = {}
       return _dictCache
     } finally {

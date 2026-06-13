@@ -16,6 +16,7 @@
     "dict": "node scripts/build-dict.mjs"
   },
   "dependencies": {
+    "petite-vue": "^0.4.1",
     "vue": "^3.4.38"
   },
   "devDependencies": {
