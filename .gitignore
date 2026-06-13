@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Generated dictionary data
+extension/dict/
+
+# Source dictionary CSV (too large for git)
+ecdict.csv
+ecdict.mini.csv
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -35,8 +35,13 @@ async function main() {
       {
         matches: ['<all_urls>'],
         js: ['dist/contentScripts/index.global.js'],
-        all_frames: true,
         run_at: 'document_end',
+      },
+    ],
+    web_accessible_resources: [
+      {
+        resources: ['dict/dict.json'],
+        matches: ['<all_urls>'],
       },
     ],
     content_security_policy: {

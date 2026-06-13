@@ -12,7 +12,8 @@
     "build:background": "vite build --config vite.config.background.mts",
     "manifest": "esno scripts/manifest.ts",
     "clear": "rimraf extension/dist extension/manifest.json",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "dict": "node scripts/build-dict.mjs"
   },
   "dependencies": {
     "vue": "^3.4.38"

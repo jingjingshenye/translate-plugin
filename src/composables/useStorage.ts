@@ -1,13 +1,13 @@
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted, type Ref } from 'vue'
 
-export function useStorage<T>(key: string, defaultValue: T) {
-  const data = ref<T>(defaultValue) as any
+export function useStorage<T>(key: string, defaultValue: T): Ref<T> {
+  const data = ref<T>(defaultValue)
   let ignoreWatch = false
 
   // 读取
   chrome.storage.local.get(key).then(result => {
     if (result[key] !== undefined) {
-      data.value = result[key]
+      (data as Ref<T>).value = result[key]
     }
   })
 
@@ -21,12 +21,12 @@ export function useStorage<T>(key: string, defaultValue: T) {
   const listener = (changes: Record<string, chrome.storage.StorageChange>) => {
     if (changes[key]) {
       ignoreWatch = true
-      data.value = changes[key].newValue
+      (data as Ref<T>).value = changes[key].newValue
       ignoreWatch = false
     }
   }
   chrome.storage.onChanged.addListener(listener)
   onUnmounted(() => chrome.storage.onChanged.removeListener(listener))
 
-  return data
+  return data as Ref<T>
 }

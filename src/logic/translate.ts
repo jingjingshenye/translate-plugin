@@ -1,6 +1,7 @@
 export interface TranslateResult {
   text: string
   srcLang: string
+  api?: string
 }
 
 // ============================================
@@ -18,6 +19,10 @@ function lang(code: string, api: string): string {
   return LANG_MAP[api]?.[code] ?? code
 }
 
+function checkRes(res: Response, api: string) {
+  if (!res.ok) throw new Error(`${api} HTTP ${res.status}`)
+}
+
 // ============================================
 // Token 缓存
 // ============================================
@@ -26,6 +31,7 @@ let msTokenTime = 0
 async function getMsToken(signal?: AbortSignal): Promise<string> {
   if (msToken && Date.now() - msTokenTime < 300000) return msToken
   const res = await fetch('https://edge.microsoft.com/translate/auth', { signal })
+  checkRes(res, 'MsAuth')
   msToken = await res.text()
   msTokenTime = Date.now()
   return msToken
@@ -43,6 +49,7 @@ export async function microsoftTranslate(text: string, from: string, to: string,
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
     body: JSON.stringify([{ Text: text }]),
   })
+  checkRes(res, 'Microsoft')
   const data = await res.json()
   if (data?.[0]?.translations?.[0]?.text) return { text: data[0].translations[0].text, srcLang: (data[0].detectedLanguage?.language || from).toUpperCase() }
   throw new Error('Microsoft failed')
@@ -52,6 +59,7 @@ export async function microsoftTranslate(text: string, from: string, to: string,
 export async function googleTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const params = new URLSearchParams({ client: 'gtx', dt: 't', dj: '1', ie: 'UTF-8', sl: from, tl: to, q: text })
   const res = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, { signal, headers: { 'Content-Type': 'application/json' } })
+  checkRes(res, 'Google')
   const data = await res.json()
   if (data?.sentences) return { text: data.sentences.map((s: any) => s.trans).join(''), srcLang: (data.src || from).toUpperCase() }
   throw new Error('Google failed')
@@ -64,6 +72,7 @@ export async function google2Translate(text: string, from: string, to: string, s
     headers: { 'Content-Type': 'application/json+protobuf', 'X-Goog-API-Key': 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520' },
     body: JSON.stringify([[[text], from, to], 'wt_lib']),
   })
+  checkRes(res, 'Google2')
   const data = await res.json()
   if (data?.[0]?.[0]) return { text: data[0][0], srcLang: (data[1]?.[0] || from).toUpperCase() }
   throw new Error('Google2 failed')
@@ -94,6 +103,7 @@ export async function deeplFreeTranslate(text: string, from: string, to: string,
       },
     }),
   })
+  checkRes(res, 'DeepL Free')
   const data = await res.json()
   if (data?.result?.texts?.[0]?.text) return { text: data.result.texts[0].text, srcLang: (data.result.lang || from).toUpperCase() }
   throw new Error('DeepL Free failed')
@@ -111,6 +121,7 @@ export async function tencentTranslate(text: string, from: string, to: string, s
       target: { lang: lang(to, 'tencent') },
     }),
   })
+  checkRes(res, 'Tencent')
   const data = await res.json()
   if (data?.auto_translation?.[0]) return { text: data.auto_translation[0], srcLang: (data.src_lang || from).toUpperCase() }
   throw new Error('Tencent failed')
@@ -123,6 +134,7 @@ export async function volcengineTranslate(text: string, from: string, to: string
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source_language: lang(from, 'volcengine'), target_language: lang(to, 'volcengine'), text }),
   })
+  checkRes(res, 'Volcengine')
   const data = await res.json()
   if (data?.translation) return { text: data.translation, srcLang: (data.detected_language || from).toUpperCase() }
   throw new Error('Volcengine failed')
@@ -136,6 +148,7 @@ export async function baiduTranslate(text: string, from: string, to: string, sig
     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'User-Agent': 'Mozilla/5.0' },
     body,
   })
+  checkRes(res, 'Baidu')
   const data = await res.json()
   if (data?.type === 2 && data?.data?.[0]?.dst) return { text: data.data.map((d: any) => d.dst).join(' '), srcLang: (data.from || from).toUpperCase() }
   if (data?.type === 1) {
@@ -264,7 +277,11 @@ export async function cloudflareTranslate(text: string, from: string, to: string
 // ============================================
 
 export function detectLang(text: string): string {
-  return (text.match(/[\u4e00-\u9fff]/g) || []).length / text.length > 0.3 ? 'zh' : 'en'
+  const zhRatio = (text.match(/[\u4e00-\u9fff]/g) || []).length / text.length
+  if (zhRatio > 0.3) return 'zh'
+  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja'
+  if (/[\uac00-\ud7af]/.test(text)) return 'ko'
+  return 'en'
 }
 
 export function getTargetLang(srcLang: string): string {
@@ -293,17 +310,17 @@ export const FREE_TRANSLATORS: TranslatorConfig[] = [
 ]
 
 export const AI_TRANSLATORS: TranslatorConfig[] = [
-  { id: 'deepseek', name: 'DeepSeek', needKey: true, translate: (t, f, to, k, s) => deepseekTranslate(t, f, to, k!, s) },
-  { id: 'openai', name: 'OpenAI', needKey: true, translate: (t, f, to, k, s) => openaiTranslate(t, f, to, k!, s) },
-  { id: 'gemini', name: 'Gemini', needKey: true, translate: (t, f, to, k, s) => geminiTranslate(t, f, to, k!, s) },
-  { id: 'claude', name: 'Claude', needKey: true, translate: (t, f, to, k, s) => claudeTranslate(t, f, to, k!, s) },
-  { id: 'deepl', name: 'DeepL', needKey: true, translate: (t, f, to, k, s) => deeplTranslate(t, f, to, k!, s) },
-  { id: 'siliconflow', name: 'SiliconFlow', needKey: true, translate: (t, f, to, k, s) => siliconflowTranslate(t, f, to, k!, s) },
-  { id: 'xiaomimimo', name: '小米MiMo', needKey: true, translate: (t, f, to, k, s) => xiaomimimoTranslate(t, f, to, k!, s) },
-  { id: 'aliyunbailian', name: '阿里百炼', needKey: true, translate: (t, f, to, k, s) => aliyunbailianTranslate(t, f, to, k!, s) },
-  { id: 'cerebras', name: 'Cerebras', needKey: true, translate: (t, f, to, k, s) => cerebrasTranslate(t, f, to, k!, s) },
-  { id: 'zai', name: '智谱AI', needKey: true, translate: (t, f, to, k, s) => zaiTranslate(t, f, to, k!, s) },
-  { id: 'openrouter', name: 'OpenRouter', needKey: true, translate: (t, f, to, k, s) => openrouterTranslate(t, f, to, k!, s) },
+  { id: 'deepseek', name: 'DeepSeek', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return deepseekTranslate(t, f, to, k, s) } },
+  { id: 'openai', name: 'OpenAI', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openaiTranslate(t, f, to, k, s) } },
+  { id: 'gemini', name: 'Gemini', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return geminiTranslate(t, f, to, k, s) } },
+  { id: 'claude', name: 'Claude', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return claudeTranslate(t, f, to, k, s) } },
+  { id: 'deepl', name: 'DeepL', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return deeplTranslate(t, f, to, k, s) } },
+  { id: 'siliconflow', name: 'SiliconFlow', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return siliconflowTranslate(t, f, to, k, s) } },
+  { id: 'xiaomimimo', name: '小米MiMo', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return xiaomimimoTranslate(t, f, to, k, s) } },
+  { id: 'aliyunbailian', name: '阿里百炼', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return aliyunbailianTranslate(t, f, to, k, s) } },
+  { id: 'cerebras', name: 'Cerebras', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return cerebrasTranslate(t, f, to, k, s) } },
+  { id: 'zai', name: '智谱AI', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return zaiTranslate(t, f, to, k, s) } },
+  { id: 'openrouter', name: 'OpenRouter', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openrouterTranslate(t, f, to, k, s) } },
 ]
 
 export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...AI_TRANSLATORS]
@@ -312,8 +329,18 @@ export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...AI_TRANSLATORS]
 // 统一翻译入口
 // ============================================
 
+const CACHE_MAX = 500
 const cache = new Map<string, TranslateResult>()
 function cacheKey(text: string, from: string, to: string, api: string) { return `${api}|${from}|${to}|${text}` }
+function cacheGet(key: string): TranslateResult | undefined {
+  const val = cache.get(key)
+  if (val) { cache.delete(key); cache.set(key, val) } // LRU: 移到末尾
+  return val
+}
+function cacheSet(key: string, val: TranslateResult) {
+  if (cache.size >= CACHE_MAX) { const first = cache.keys().next().value; if (first) cache.delete(first) }
+  cache.set(key, val)
+}
 
 export async function translateText(
   text: string,
@@ -324,13 +351,14 @@ export async function translateText(
   apiKey?: string,
 ): Promise<TranslateResult> {
   const key = cacheKey(text, from, to, apiId)
-  const cached = cache.get(key)
+  const cached = cacheGet(key)
   if (cached) return cached
 
   const translator = ALL_TRANSLATORS.find(t => t.id === apiId) || FREE_TRANSLATORS[0]
   const result = await translator.translate(text, from, to, apiKey, signal)
+  result.api = translator.id
 
-  cache.set(key, result)
+  cacheSet(key, result)
   return result
 }
 
@@ -343,25 +371,25 @@ export async function translateWithFallback(
   apiId = 'microsoft',
   apiKey?: string,
 ): Promise<TranslateResult> {
-  const key = cacheKey(text, from, to, apiId + '_fallback')
+  const key = cacheKey(text, from, to, apiId + '_fb')
   const cached = cache.get(key)
   if (cached) return cached
 
-  // 先尝试指定的 API
   try {
     const result = await translateText(text, from, to, signal, apiId, apiKey)
+    cacheSet(key, result)
     return result
   } catch {}
 
-  // 失败则尝试所有免费 API
   for (const t of FREE_TRANSLATORS) {
     if (t.id === apiId) continue
     try {
       const result = await t.translate(text, from, to, undefined, signal)
-      cache.set(key, result)
+      result.api = t.id
+      cacheSet(key, result)
       return result
     } catch {}
   }
 
-  return { text: '翻译失败', srcLang: from.toUpperCase() }
+  return { text: '翻译失败', srcLang: from.toUpperCase(), api: 'none' }
 }

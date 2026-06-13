@@ -13,13 +13,11 @@ export default defineConfig({
     sourcemap: false,
     lib: {
       entry: resolve(rootDir, 'background/main.ts'),
-      name: 'quickTranslateBg',
-      formats: ['iife'],
+      formats: ['es'],
     },
     rollupOptions: {
       output: {
         entryFileNames: 'index.mjs',
-        extend: true,
       },
     },
   },
