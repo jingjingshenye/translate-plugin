@@ -126,15 +126,62 @@ async function tencentTranslate(text: string, from: string, to: string, signal?:
   throw new Error('Tencent failed')
 }
 
-// 腾讯翻译（官方API，需Key）
+// 腾讯云 TC3-HMAC-SHA256 签名
+async function sha256Hex(msg: string): Promise<string> {
+  const data = new TextEncoder().encode(msg)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+async function hmacSha256(key: ArrayBuffer | Uint8Array, msg: string): Promise<ArrayBuffer> {
+  const k = await crypto.subtle.importKey('raw', key instanceof ArrayBuffer ? key : key.buffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg))
+}
+async function hmacSha256Hex(key: ArrayBuffer | Uint8Array, msg: string): Promise<string> {
+  const buf = await hmacSha256(key, msg)
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// 腾讯翻译（官方API，需Key，TC3 签名）
 export async function tencentOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const [secretId, secretKey] = key.split(':')
   if (!secretId || !secretKey) throw new Error('腾讯Key格式: SecretId:SecretKey')
-  // 使用腾讯云API v3签名（简化版，直接调用API）
+
+  const service = 'tmt'
+  const action = 'TextTranslate'
+  const version = '2018-03-21'
+  const region = 'ap-guangdong'
+  const timestamp = Math.floor(Date.now() / 1000)
+  const date = new Date(timestamp * 1000).toISOString().slice(0, 10)
+
+  const payload = JSON.stringify({ SourceText: text, Source: lang(from, 'tencent'), Target: lang(to, 'tencent'), ProjectId: 0 })
+  const payloadHash = await sha256Hex(payload)
+
+  const canonicalHeaders = `content-type:application/json\nhost:tmt.tencentcloudapi.com\nx-tc-action:${action.toLowerCase()}\n`
+  const signedHeaders = 'content-type;host;x-tc-action'
+  const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`
+
+  const credentialScope = `${date}/${service}/tc3_request`
+  const stringToSign = `TC3-HMAC-SHA256\n${timestamp}\n${credentialScope}\n${await sha256Hex(canonicalRequest)}`
+
+  const secretDate = await hmacSha256(new TextEncoder().encode('TC3' + secretKey), date)
+  const secretService = await hmacSha256(new Uint8Array(secretDate), service)
+  const secretSigning = await hmacSha256(new Uint8Array(secretService), 'tc3_request')
+  const signature = await hmacSha256Hex(new Uint8Array(secretSigning), stringToSign)
+
+  const authorization = `TC3-HMAC-SHA256 Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
+
   const res = await fetch('https://tmt.tencentcloudapi.com', {
     signal, method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-TC-Action': 'TextTranslate', 'X-TC-Version': '2018-03-21' },
-    body: JSON.stringify({ SourceText: text, Source: lang(from, 'tencent'), Target: lang(to, 'tencent'), ProjectId: 0 }),
+    headers: {
+      'Content-Type': 'application/json',
+      'Host': 'tmt.tencentcloudapi.com',
+      'X-TC-Action': action,
+      'X-TC-Version': version,
+      'X-TC-Timestamp': String(timestamp),
+      'X-TC-Region': region,
+      'Authorization': authorization,
+    },
+    body: payload,
   })
   const data = await res.json()
   if (data?.Response?.TargetText) return { text: data.Response.TargetText, srcLang: from.toUpperCase() }
@@ -358,7 +405,6 @@ export const AI_TRANSLATORS: TranslatorConfig[] = [
   { id: 'openai', name: 'OpenAI', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openaiTranslate(t, f, to, k, s) } },
   { id: 'gemini', name: 'Gemini', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return geminiTranslate(t, f, to, k, s) } },
   { id: 'claude', name: 'Claude', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return claudeTranslate(t, f, to, k, s) } },
-  { id: 'deepl', name: 'DeepL', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return deeplTranslate(t, f, to, k, s) } },
   { id: 'siliconflow', name: 'SiliconFlow', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return siliconflowTranslate(t, f, to, k, s) } },
   { id: 'xiaomimimo', name: '小米MiMo', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return xiaomimimoTranslate(t, f, to, k, s) } },
   { id: 'aliyunbailian', name: '阿里百炼', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return aliyunbailianTranslate(t, f, to, k, s) } },

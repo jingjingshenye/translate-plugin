@@ -5,6 +5,7 @@
 ## 功能
 
 - **划词翻译** — 选中文字后出现翻译图标，点击查看翻译和词典释义
+- **输入框翻译** — 支持在 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字触发翻译
 - **弹窗翻译** — 点击插件图标，输入文本翻译
 - **18+ 翻译源** — 免费: Microsoft / Google / Tencent / Volcengine / Baidu / DeepL Free; AI: DeepSeek / OpenAI / Gemini / Claude 等
 - **自定义 API** — 支持任何 OpenAI 兼容格式的翻译接口

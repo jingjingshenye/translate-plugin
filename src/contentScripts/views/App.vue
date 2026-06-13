@@ -3,6 +3,16 @@ import { ref, onUnmounted } from 'vue'
 import { translateWithFallback, detectLang, getTargetLang, ALL_TRANSLATORS, FREE_TRANSLATORS, AI_TRANSLATORS } from '~/logic/translate'
 import { isValidWord, lookupDict, localDict, bingDict, type DictResult } from '~/logic/dict'
 
+const MAX_SELECTION_LENGTH = 5000
+const POPUP_WIDTH = 340
+const POPUP_MAX_HEIGHT = 370
+const ICON_SIZE = 28
+const POPUP_MARGIN = 8
+const POPUP_ABOVE_OFFSET = 362
+const POPUP_BELOW_THRESHOLD = 200
+const HOVER_DELAY = 300
+const MOUSEUP_DELAY = 100
+
 const isOpen = ref(false)
 const loading = ref(false)
 const error = ref('')
@@ -33,10 +43,10 @@ let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
 async function loadSettings() {
   try {
-    const r = await chrome.storage.local.get(['qt_api', 'qt_api_keys', 'qt_custom_api'])
-    if (r.qt_api) currentApi.value = r.qt_api
-    if (r.qt_api_keys) apiKeys.value = r.qt_api_keys
-    if (r.qt_custom_api) customApi.value = r.qt_custom_api
+    const result = await chrome.storage.local.get(['qt_api', 'qt_api_keys', 'qt_custom_api'])
+    if (result.qt_api) currentApi.value = result.qt_api
+    if (result.qt_api_keys) apiKeys.value = result.qt_api_keys
+    if (result.qt_custom_api) customApi.value = result.qt_custom_api
   } catch (e) { console.warn('[QT] loadSettings:', e) }
 }
 loadSettings()
@@ -47,79 +57,161 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.qt_custom_api) customApi.value = changes.qt_custom_api.newValue
 })
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'translate-text' && msg.text) {
-    sourceText.value = msg.text
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'translate-text' && message.text) {
+    sourceText.value = message.text
     selectionRect = null
     popupPos.value = { x: window.innerWidth - 360, y: 20 }
-    doTranslate(msg.text)
+    doTranslate(message.text)
   }
 })
 
-function onMouseUp(e: MouseEvent) {
-  if (isOpen.value) return
-  if (e.button !== 0) return
+// ============================================
+// Text measurement (canvas-based, for input/textarea caret positioning)
+// ============================================
+const measureCanvas = document.createElement('canvas')
 
-  setTimeout(() => {
-    const sel = window.getSelection()
-    const text = sel?.toString().trim()
-    if (!text || text.length < 1 || text.length > 5000) return
-
-    try {
-      const range = sel!.getRangeAt(0)
-      const rects = range.getClientRects()
-      selectionRect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect()
-    } catch { return }
-    if (!selectionRect || selectionRect.width === 0) return
-
-    sourceText.value = text
-    iconPos.value = {
-      x: Math.min(selectionRect.right, window.innerWidth - 28),
-      y: Math.min(selectionRect.bottom, window.innerHeight - 28),
-    }
-  }, 100)
+function measureTextWidth(element: HTMLInputElement | HTMLTextAreaElement, text: string): number {
+  const computedStyle = getComputedStyle(element)
+  const context = measureCanvas.getContext('2d')!
+  context.font = `${computedStyle.fontStyle} ${computedStyle.fontVariant} ${computedStyle.fontWeight} ${computedStyle.fontSize} ${computedStyle.fontFamily}`
+  return context.measureText(text).width
 }
 
-function onIconClick(e: MouseEvent) {
-  e.stopPropagation()
-  if (!sourceText.value) return
+function getCaretPosition(element: HTMLInputElement | HTMLTextAreaElement, offset: number): { x: number; y: number; height: number } {
+  const textBefore = element.value.substring(0, offset)
+  const computedStyle = getComputedStyle(element)
+  const borderTop = parseFloat(computedStyle.borderTopWidth) || 0
+  const borderLeft = parseFloat(computedStyle.borderLeftWidth) || 0
+  const scrollTop = element.scrollTop || 0
+  const scrollLeft = element.scrollLeft || 0
 
-  const popupW = 340
-  let px = 8, py = 8
-
-  if (selectionRect) {
-    px = Math.max(8, Math.min(selectionRect.left, window.innerWidth - popupW - 8))
-    const below = window.innerHeight - selectionRect.bottom
-    const above = selectionRect.top
-    if (below >= 200 || below >= above) {
-      py = Math.min(selectionRect.bottom + 2, window.innerHeight - 370)
-    } else {
-      py = Math.max(8, selectionRect.top - 362)
-    }
+  if (element.tagName === 'TEXTAREA') {
+    const lines = textBefore.split('\n')
+    const lineIndex = lines.length - 1
+    const lineHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.2 || 18
+    const paddingTop = parseFloat(computedStyle.paddingTop) || 0
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0
+    const textWidth = measureTextWidth(element, lines[lineIndex])
+    return { x: borderLeft + paddingLeft + textWidth - scrollLeft, y: borderTop + paddingTop + lineIndex * lineHeight + lineHeight - scrollTop, height: lineHeight }
   }
 
-  popupPos.value = { x: px, y: py }
+  const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0
+  const fontSize = parseFloat(computedStyle.fontSize) || 14
+  const textWidth = measureTextWidth(element, textBefore)
+  return { x: borderLeft + paddingLeft + textWidth - scrollLeft, y: borderTop + fontSize, height: fontSize }
+}
+
+// ============================================
+// Selection detection: input/textarea, Shadow DOM (via getComposedRanges), regular page
+// ============================================
+
+function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaElement | null {
+  // 直接检查 event.target（mouseup 时 target 就是用户松开鼠标的元素）
+  const target = event.target as HTMLElement
+  if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return target as HTMLInputElement | HTMLTextAreaElement
+  // composedPath() 兜底：处理 Shadow DOM 内的 input
+  try {
+    for (const el of event.composedPath()) {
+      const tag = (el as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return el as HTMLInputElement | HTMLTextAreaElement
+    }
+  } catch {}
+  return null
+}
+
+// ============================================
+// Event handlers
+// ============================================
+
+function onMouseUp(event: MouseEvent) {
+  if (isOpen.value) return
+  if (event.button !== 0) return
+
+  // 在事件阶段立即查找 input（composedPath() 在 setTimeout 中可能失效）
+  const inputElement = findInputElement(event)
+
+  setTimeout(() => {
+    const hit = getInputSelection(inputElement) || getComposedSelection()
+    if (!hit) return
+
+    selectionRect = hit.rect
+    sourceText.value = hit.text
+    iconPos.value = {
+      x: Math.min(hit.rect.right, window.innerWidth - ICON_SIZE),
+      y: Math.min(hit.rect.bottom, window.innerHeight - ICON_SIZE),
+    }
+  }, MOUSEUP_DELAY)
+}
+
+function getInputSelection(element: HTMLInputElement | HTMLTextAreaElement | null): { text: string; rect: DOMRect } | null {
+  if (!element) return null
+
+  const start = element.selectionStart ?? 0
+  const end = element.selectionEnd ?? 0
+  const text = element.value.substring(start, end).trim()
+  if (!text || text.length < 1 || text.length > MAX_SELECTION_LENGTH) return null
+
+  const boundingRect = element.getBoundingClientRect()
+  const caretPos = getCaretPosition(element, end)
+  const caretX = boundingRect.left + Math.min(caretPos.x, boundingRect.width)
+  const caretY = boundingRect.top + Math.min(caretPos.y, boundingRect.height)
+  const rect = new DOMRect(caretX, caretY - caretPos.height, 0, caretPos.height)
+  return { text, rect }
+}
+
+function getComposedSelection(): { text: string; rect: DOMRect } | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+
+  // getComposedRanges() 穿透 Shadow DOM 边界，返回 StaticRange[]
+  const composedRanges = selection.getComposedRanges()
+  if (!composedRanges || composedRanges.length === 0) return null
+
+  const staticRange = composedRanges[0]
+  if (staticRange.collapsed) return null
+
+  // StaticRange 没有 getClientRects()，需要转换为完整 Range
+  const range = new Range()
+  range.setStart(staticRange.startContainer, staticRange.startOffset)
+  range.setEnd(staticRange.endContainer, staticRange.endOffset)
+
+  const text = range.toString().trim()
+  if (!text || text.length < 1 || text.length > MAX_SELECTION_LENGTH) return null
+
+  const rects = range.getClientRects()
+  const rect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect()
+  if (!rect || rect.width === 0) return null
+
+  return { text, rect }
+}
+
+function calculatePopupPosition(): { x: number; y: number } {
+  if (!selectionRect) return { x: POPUP_MARGIN, y: POPUP_MARGIN }
+
+  const x = Math.max(POPUP_MARGIN, Math.min(selectionRect.left, window.innerWidth - POPUP_WIDTH - POPUP_MARGIN))
+  const spaceBelow = window.innerHeight - selectionRect.bottom
+  const spaceAbove = selectionRect.top
+  const y = (spaceBelow >= POPUP_BELOW_THRESHOLD || spaceBelow >= spaceAbove)
+    ? Math.min(selectionRect.bottom + 2, window.innerHeight - POPUP_MAX_HEIGHT)
+    : Math.max(POPUP_MARGIN, selectionRect.top - POPUP_ABOVE_OFFSET)
+  return { x, y }
+}
+
+function onIconClick(event: MouseEvent) {
+  event.stopPropagation()
+  if (!sourceText.value) return
+
+  popupPos.value = calculatePopupPosition()
   doTranslate(sourceText.value)
 }
 
 function onIconMouseEnter() {
   if (sourceText.value && !isOpen.value) {
     hoverTimer = setTimeout(() => {
-      const popupW = 340
-      let px = 8, py = 8
-      if (selectionRect) {
-        px = Math.max(8, Math.min(selectionRect.left, window.innerWidth - popupW - 8))
-        const below = window.innerHeight - selectionRect.bottom
-        const above = selectionRect.top
-        if (below >= 200 || below >= above) {
-          py = Math.min(selectionRect.bottom + 2, window.innerHeight - 370)
-        } else {
-          py = Math.max(8, selectionRect.top - 362)
-        }
-      }
-      popupPos.value = { x: px, y: py }
+      popupPos.value = calculatePopupPosition()
       doTranslate(sourceText.value)
-    }, 300)
+    }, HOVER_DELAY)
   }
 }
 
@@ -189,37 +281,37 @@ function retranslateWithLang() {
 const isFaved = ref(false)
 async function checkFaved(word: string) {
   try {
-    const r = await chrome.storage.local.get('qt_words')
-    isFaved.value = !!(r.qt_words && r.qt_words[word])
+    const result = await chrome.storage.local.get('qt_words')
+    isFaved.value = !!(result.qt_words && result.qt_words[word])
   } catch { isFaved.value = false }
 }
 async function toggleFav() {
   if (!sourceText.value) return
   try {
-    const r = await chrome.storage.local.get('qt_words')
-    const w = r.qt_words ? { ...r.qt_words } : {}
-    if (w[sourceText.value]) { delete w[sourceText.value]; isFaved.value = false }
-    else { w[sourceText.value] = { createdAt: Date.now(), translation: translatedText.value }; isFaved.value = true }
-    await chrome.storage.local.set({ qt_words: w })
+    const result = await chrome.storage.local.get('qt_words')
+    const words = result.qt_words ? { ...result.qt_words } : {}
+    if (words[sourceText.value]) { delete words[sourceText.value]; isFaved.value = false }
+    else { words[sourceText.value] = { createdAt: Date.now(), translation: translatedText.value }; isFaved.value = true }
+    await chrome.storage.local.set({ qt_words: words })
   } catch {}
 }
 
 function copyText() { navigator.clipboard.writeText(translatedText.value) }
 
-function onDocMousedown(e: MouseEvent) {
+function onDocumentMousedown(event: MouseEvent) {
   if (!isOpen.value) return
-  const t = e.target as Element
-  if (!t?.closest?.('[data-qt-popup]') && !t?.closest?.('[data-qt-icon]')) closePopup()
+  const target = event.target as Element
+  if (!target?.closest?.('[data-qt-popup]') && !target?.closest?.('[data-qt-icon]')) closePopup()
 }
 
 document.addEventListener('mouseup', onMouseUp)
-document.addEventListener('mousedown', onDocMousedown)
-function onKeydown(e: KeyboardEvent) { if (e.key === 'Escape') closePopup() }
+document.addEventListener('mousedown', onDocumentMousedown)
+function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closePopup() }
 document.addEventListener('keydown', onKeydown)
 
 onUnmounted(() => {
   document.removeEventListener('mouseup', onMouseUp)
-  document.removeEventListener('mousedown', onDocMousedown)
+  document.removeEventListener('mousedown', onDocumentMousedown)
   document.removeEventListener('keydown', onKeydown)
   if (hoverTimer) clearTimeout(hoverTimer)
 })
