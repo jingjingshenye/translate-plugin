@@ -1,3 +1,6 @@
+import { md5 } from './md5'
+import { FREE_META, SUBSCRIBE_META, AI_META } from './translators-meta'
+
 export interface TranslateResult {
   text: string
   srcLang: string
@@ -11,7 +14,8 @@ const LANG_MAP: Record<string, Record<string, string>> = {
   microsoft: { 'zh': 'zh-Hans', 'zh-TW': 'zh-Hant', 'auto': '' },
   deepl: { 'zh': 'ZH', 'zh-TW': 'ZH', 'auto': '', 'en': 'EN', 'ja': 'JA', 'ko': 'KO', 'fr': 'FR', 'de': 'DE', 'es': 'ES', 'ru': 'RU' },
   baidu: { 'zh': 'zh', 'zh-TW': 'cht', 'ja': 'jp', 'ko': 'kor', 'fr': 'fra', 'de': 'de', 'es': 'spa', 'ru': 'ru', 'ar': 'ara', 'pt': 'pt' },
-  tencent: { 'zh-CN': 'zh', 'zh-TW': 'zh', 'fi': 'fil' },
+  tencent_free: { 'zh': 'zh-CHS', 'zh-TW': 'zh-CHT' },
+  tencent_official: { 'zh': 'zh', 'zh-TW': 'zh-TW' },
   volcengine: { 'zh-CN': 'zh', 'zh-TW': 'zh-Hant', 'auto': 'auto' },
 }
 
@@ -24,7 +28,35 @@ function checkRes(res: Response, api: string) {
 }
 
 // ============================================
-// Token 缓存
+// AI 模型覆盖（用户可在 Options 配置 qt_api_models[apiId]）
+// ============================================
+let _modelsCache: Record<string, string> | null = null
+let _modelsLoadTime = 0
+const MODEL_TTL = 10000
+
+async function getModels(): Promise<Record<string, string>> {
+  if (_modelsCache && Date.now() - _modelsLoadTime < MODEL_TTL) return _modelsCache
+  try {
+    const { qt_api_models } = await chrome.storage.local.get('qt_api_models')
+    _modelsCache = qt_api_models || {}
+  } catch { _modelsCache = {} }
+  _modelsLoadTime = Date.now()
+  return _modelsCache
+}
+
+try {
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.qt_api_models) _modelsCache = null
+  })
+} catch {}
+
+async function getModel(id: string, fallback: string): Promise<string> {
+  const models = await getModels()
+  return models[id] || fallback
+}
+
+// ============================================
+// Token 缓存（Microsoft Edge）
 // ============================================
 let msToken = ''
 let msTokenTime = 0
@@ -41,7 +73,6 @@ async function getMsToken(signal?: AbortSignal): Promise<string> {
 // 免费翻译 API（无需 Key）
 // ============================================
 
-// Microsoft Edge 翻译（最快）
 export async function microsoftTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const token = await getMsToken(signal)
   const res = await fetch(`https://api-edge.cognitive.microsofttranslator.com/translate?from=${lang(from, 'microsoft')}&to=${lang(to, 'microsoft')}&api-version=3.0`, {
@@ -55,7 +86,6 @@ export async function microsoftTranslate(text: string, from: string, to: string,
   throw new Error('Microsoft failed')
 }
 
-// Google 翻译
 export async function googleTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const params = new URLSearchParams({ client: 'gtx', dt: 't', dj: '1', ie: 'UTF-8', sl: from, tl: to, q: text })
   const res = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, { signal, headers: { 'Content-Type': 'application/json' } })
@@ -65,20 +95,6 @@ export async function googleTranslate(text: string, from: string, to: string, si
   throw new Error('Google failed')
 }
 
-// Google2 翻译
-export async function google2Translate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
-  const res = await fetch('https://translate-pa.googleapis.com/v1/translateHtml', {
-    signal, method: 'POST',
-    headers: { 'Content-Type': 'application/json+protobuf', 'X-Goog-API-Key': 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520' },
-    body: JSON.stringify([[[text], from, to], 'wt_lib']),
-  })
-  checkRes(res, 'Google2')
-  const data = await res.json()
-  if (data?.[0]?.[0]) return { text: data[0][0], srcLang: (data[1]?.[0] || from).toUpperCase() }
-  throw new Error('Google2 failed')
-}
-
-// DeepL 免费（网页逆向）
 export async function deeplFreeTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const id = Math.floor(Math.random() * 1000000000)
   const ts = Date.now()
@@ -109,7 +125,6 @@ export async function deeplFreeTranslate(text: string, from: string, to: string,
   throw new Error('DeepL Free failed')
 }
 
-// 腾讯翻译（免费网页版）
 async function tencentTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const res = await fetch('https://transmart.qq.com/api/imt', {
     signal, method: 'POST',
@@ -117,8 +132,8 @@ async function tencentTranslate(text: string, from: string, to: string, signal?:
     body: JSON.stringify({
       header: { fn: 'auto_translation', client_key: 'browser-chrome-120-W-' + Date.now() },
       type: 'plain', model_category: 'normal',
-      source: { text_list: [text], lang: lang(from, 'tencent') },
-      target: { lang: lang(to, 'tencent') },
+      source: { text_list: [text], lang: lang(from, 'tencent_free') },
+      target: { lang: lang(to, 'tencent_free') },
     }),
   })
   const data = await res.json()
@@ -141,7 +156,6 @@ async function hmacSha256Hex(key: ArrayBuffer | Uint8Array, msg: string): Promis
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// 腾讯翻译（官方API，需Key，TC3 签名）
 export async function tencentOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const [secretId, secretKey] = key.split(':')
   if (!secretId || !secretKey) throw new Error('腾讯Key格式: SecretId:SecretKey')
@@ -153,7 +167,7 @@ export async function tencentOfficialTranslate(text: string, from: string, to: s
   const timestamp = Math.floor(Date.now() / 1000)
   const date = new Date(timestamp * 1000).toISOString().slice(0, 10)
 
-  const payload = JSON.stringify({ SourceText: text, Source: lang(from, 'tencent'), Target: lang(to, 'tencent'), ProjectId: 0 })
+  const payload = JSON.stringify({ SourceText: text, Source: lang(from, 'tencent_official'), Target: lang(to, 'tencent_official'), ProjectId: 0 })
   const payloadHash = await sha256Hex(payload)
 
   const canonicalHeaders = `content-type:application/json\nhost:tmt.tencentcloudapi.com\nx-tc-action:${action.toLowerCase()}\n`
@@ -188,12 +202,12 @@ export async function tencentOfficialTranslate(text: string, from: string, to: s
   throw new Error(data?.Response?.Error?.Message || 'Tencent API failed')
 }
 
-// 百度翻译（官方API，需Key）
+// 百度翻译（官方API，需Key）— md5(appid + q + salt + key)
 export async function baiduOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const [appid, secret] = key.split(':')
   if (!appid || !secret) throw new Error('百度Key格式: AppID:密钥')
   const salt = Date.now().toString()
-  const sign = Buffer.from(appid + text + salt + secret).toString('base64') // 简化签名
+  const sign = md5(appid + text + salt + secret)
   const params = new URLSearchParams({ q: text, from: lang(from, 'baidu'), to: lang(to, 'baidu'), appid, salt, sign })
   const res = await fetch(`https://fanyi-api.baidu.com/api/trans/vip/translate?${params}`, { signal })
   checkRes(res, 'Baidu API')
@@ -202,7 +216,6 @@ export async function baiduOfficialTranslate(text: string, from: string, to: str
   throw new Error(data?.error_msg || 'Baidu API failed')
 }
 
-// Google翻译（官方API，需Key）
 export async function googleOfficialTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const params = new URLSearchParams({ q: text, source: from === 'auto' ? 'auto' : from, target: to, format: 'text', key })
   const res = await fetch(`https://translation.googleapis.com/language/translate/v2?${params}`, { signal })
@@ -212,7 +225,6 @@ export async function googleOfficialTranslate(text: string, from: string, to: st
   throw new Error('Google API failed')
 }
 
-// 火山翻译
 export async function volcengineTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const res = await fetch('https://translate.volcengine.com/crx/translate/v1', {
     signal, method: 'POST',
@@ -225,7 +237,6 @@ export async function volcengineTranslate(text: string, from: string, to: string
   throw new Error('Volcengine failed')
 }
 
-// 百度翻译
 export async function baiduTranslate(text: string, from: string, to: string, signal?: AbortSignal): Promise<TranslateResult> {
   const body = `from=${lang(from, 'baidu')}&to=${lang(to, 'baidu')}&query=${encodeURIComponent(text)}&source=txt`
   const res = await fetch('https://fanyi.baidu.com/transapi', {
@@ -243,20 +254,29 @@ export async function baiduTranslate(text: string, from: string, to: string, sig
 }
 
 // ============================================
-// AI 翻译 API（需要 Key）
+// AI 翻译 API（需要 Key，model 可由用户覆盖）
 // ============================================
 
-// 通用 OpenAI 兼容接口
+const AI_DEFAULT_MODELS: Record<string, string> = {
+  deepseek: 'deepseek-chat',
+  openai: 'gpt-4o-mini',
+  siliconflow: 'deepseek-ai/DeepSeek-V3',
+  xiaomimimo: 'MiMo',
+  aliyunbailian: 'qwen-plus',
+  cerebras: 'llama3.1-8b',
+  zai: 'glm-4-flash',
+  openrouter: 'openai/gpt-4o-mini',
+}
+
 async function openaiCompatibleTranslate(text: string, from: string, to: string, url: string, key: string, model: string, signal?: AbortSignal): Promise<TranslateResult> {
   const fromName = from === 'auto' ? 'auto-detected' : from
-  const toName = to
   const res = await fetch(url, {
     signal, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
     body: JSON.stringify({
       model,
       messages: [
-        { role: 'system', content: `You are a translator. Translate the following text from ${fromName} to ${toName}. Output ONLY the translated text, no explanations.` },
+        { role: 'system', content: `You are a translator. Translate the following text from ${fromName} to ${to}. Output ONLY the translated text, no explanations.` },
         { role: 'user', content: text },
       ],
       temperature: 0.3,
@@ -268,42 +288,40 @@ async function openaiCompatibleTranslate(text: string, from: string, to: string,
   throw new Error('OpenAI compatible failed')
 }
 
-export async function deepseekTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://api.deepseek.com/chat/completions', key, 'deepseek-chat', signal)
+async function aiWrap(id: string, url: string, text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
+  const model = await getModel(id, AI_DEFAULT_MODELS[id])
+  return openaiCompatibleTranslate(text, from, to, url, key, model, signal)
 }
 
-export async function openaiTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://api.openai.com/v1/chat/completions', key, 'gpt-4o-mini', signal)
+export async function deepseekTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('deepseek', 'https://api.deepseek.com/chat/completions', text, from, to, key, signal)
+}
+export async function openaiTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('openai', 'https://api.openai.com/v1/chat/completions', text, from, to, key, signal)
+}
+export async function siliconflowTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('siliconflow', 'https://api.siliconflow.cn/v1/chat/completions', text, from, to, key, signal)
+}
+export async function xiaomimimoTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('xiaomimimo', 'https://api.xiaomimimo.com/v1/chat/completions', text, from, to, key, signal)
+}
+export async function aliyunbailianTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('aliyunbailian', 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', text, from, to, key, signal)
+}
+export async function cerebrasTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('cerebras', 'https://api.cerebras.ai/v1/chat/completions', text, from, to, key, signal)
+}
+export async function zaiTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('zai', 'https://open.bigmodel.cn/api/paas/v4/chat/completions', text, from, to, key, signal)
+}
+export async function openrouterTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal) {
+  return aiWrap('openrouter', 'https://openrouter.ai/api/v1/chat/completions', text, from, to, key, signal)
 }
 
-export async function siliconflowTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://api.siliconflow.cn/v1/chat/completions', key, 'deepseek-ai/DeepSeek-V3', signal)
-}
-
-export async function xiaomimimoTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://api.xiaomimimo.com/v1/chat/completions', key, 'MiMo', signal)
-}
-
-export async function aliyunbailianTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', key, 'qwen-plus', signal)
-}
-
-export async function cerebrasTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://api.cerebras.ai/v1/chat/completions', key, 'llama3.1-8b', signal)
-}
-
-export async function zaiTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://open.bigmodel.cn/api/paas/v4/chat/completions', key, 'glm-4-flash', signal)
-}
-
-export async function openrouterTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
-  return openaiCompatibleTranslate(text, from, to, 'https://openrouter.ai/api/v1/chat/completions', key, 'openai/gpt-4o-mini', signal)
-}
-
-// Gemini
 export async function geminiTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const fromName = from === 'auto' ? 'auto-detected' : from
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+  const model = await getModel('gemini', 'gemini-2.0-flash')
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
     signal, method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -316,14 +334,14 @@ export async function geminiTranslate(text: string, from: string, to: string, ke
   throw new Error('Gemini failed')
 }
 
-// Claude
 export async function claudeTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const fromName = from === 'auto' ? 'auto-detected' : from
+  const model = await getModel('claude', 'claude-haiku-4-5-20251001')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     signal, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({
-      model: 'claude-3-haiku-20240307',
+      model,
       max_tokens: 1024,
       messages: [{ role: 'user', content: `Translate from ${fromName} to ${to}. Output ONLY the translated text:\n\n${text}` }],
     }),
@@ -333,7 +351,6 @@ export async function claudeTranslate(text: string, from: string, to: string, ke
   throw new Error('Claude failed')
 }
 
-// DeepL 官方
 export async function deeplTranslate(text: string, from: string, to: string, key: string, signal?: AbortSignal): Promise<TranslateResult> {
   const res = await fetch('https://api-free.deepl.com/v2/translate', {
     signal, method: 'POST',
@@ -345,33 +362,10 @@ export async function deeplTranslate(text: string, from: string, to: string, key
   throw new Error('DeepL failed')
 }
 
-// Cloudflare AI
-export async function cloudflareTranslate(text: string, from: string, to: string, key: string, accountId: string, signal?: AbortSignal): Promise<TranslateResult> {
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/meta/m2m100-1.2b`, {
-    signal, method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ text, source_lang: from === 'auto' ? 'en' : from, target_lang: to }),
-  })
-  const data = await res.json()
-  if (data?.result?.translated_text) return { text: data.result.translated_text, srcLang: from.toUpperCase() }
-  throw new Error('Cloudflare failed')
-}
-
 // ============================================
-// 语言检测 & 工具函数
+// 语言检测 & 工具函数（实现在 lang-utils.ts，纯函数无副作用）
 // ============================================
-
-export function detectLang(text: string): string {
-  const zhRatio = (text.match(/[\u4e00-\u9fff]/g) || []).length / text.length
-  if (zhRatio > 0.3) return 'zh'
-  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja'
-  if (/[\uac00-\ud7af]/.test(text)) return 'ko'
-  return 'en'
-}
-
-export function getTargetLang(srcLang: string): string {
-  return srcLang === 'zh' ? 'en' : 'zh'
-}
+export { detectLang, getTargetLang } from './lang-utils'
 
 // ============================================
 // 翻译源配置
@@ -384,45 +378,69 @@ export interface TranslatorConfig {
   translate: (text: string, from: string, to: string, key?: string, signal?: AbortSignal) => Promise<TranslateResult>
 }
 
-export const FREE_TRANSLATORS: TranslatorConfig[] = [
-  { id: 'microsoft', name: 'Microsoft', needKey: false, translate: microsoftTranslate },
-  { id: 'google', name: 'Google (Free)', needKey: false, translate: googleTranslate },
-  { id: 'deeplfree', name: 'DeepL Free', needKey: false, translate: deeplFreeTranslate },
-  { id: 'tencent', name: '腾讯 (Free)', needKey: false, translate: tencentTranslate },
-  { id: 'volcengine', name: '火山 (Free)', needKey: false, translate: volcengineTranslate },
-  { id: 'baidu', name: '百度 (Free)', needKey: false, translate: baiduTranslate },
-]
+// 实现表（id → translate 函数）：元数据 translators-meta.ts 单独维护
+type Impl = TranslatorConfig['translate']
 
-export const SUBSCRIBE_TRANSLATORS: TranslatorConfig[] = [
-  { id: 'tencent_official', name: '腾讯云翻译', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: SecretId:SecretKey'); return tencentOfficialTranslate(t, f, to, k, s) } },
-  { id: 'baidu_official', name: '百度翻译API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: AppID:密钥'); return baiduOfficialTranslate(t, f, to, k, s) } },
-  { id: 'google_official', name: 'Google API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return googleOfficialTranslate(t, f, to, k, s) } },
-  { id: 'deepl', name: 'DeepL API', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return deeplTranslate(t, f, to, k, s) } },
-]
+const FREE_IMPL: Record<string, Impl> = {
+  microsoft: microsoftTranslate,
+  google: googleTranslate,
+  deeplfree: deeplFreeTranslate,
+  tencent: tencentTranslate,
+  volcengine: volcengineTranslate,
+  baidu: baiduTranslate,
+}
 
-export const AI_TRANSLATORS: TranslatorConfig[] = [
-  { id: 'deepseek', name: 'DeepSeek', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return deepseekTranslate(t, f, to, k, s) } },
-  { id: 'openai', name: 'OpenAI', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openaiTranslate(t, f, to, k, s) } },
-  { id: 'gemini', name: 'Gemini', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return geminiTranslate(t, f, to, k, s) } },
-  { id: 'claude', name: 'Claude', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return claudeTranslate(t, f, to, k, s) } },
-  { id: 'siliconflow', name: 'SiliconFlow', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return siliconflowTranslate(t, f, to, k, s) } },
-  { id: 'xiaomimimo', name: '小米MiMo', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return xiaomimimoTranslate(t, f, to, k, s) } },
-  { id: 'aliyunbailian', name: '阿里百炼', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return aliyunbailianTranslate(t, f, to, k, s) } },
-  { id: 'cerebras', name: 'Cerebras', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return cerebrasTranslate(t, f, to, k, s) } },
-  { id: 'zai', name: '智谱AI', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return zaiTranslate(t, f, to, k, s) } },
-  { id: 'openrouter', name: 'OpenRouter', needKey: true, translate: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openrouterTranslate(t, f, to, k, s) } },
-]
+const SUBSCRIBE_IMPL: Record<string, Impl> = {
+  tencent_official: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: SecretId:SecretKey'); return tencentOfficialTranslate(t, f, to, k, s) },
+  baidu_official: (t, f, to, k, s) => { if (!k) throw new Error('Key格式: AppID:密钥'); return baiduOfficialTranslate(t, f, to, k, s) },
+  google_official: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return googleOfficialTranslate(t, f, to, k, s) },
+  deepl: (t, f, to, k, s) => { if (!k) throw new Error('需要 API Key'); return deeplTranslate(t, f, to, k, s) },
+}
+
+const AI_IMPL: Record<string, Impl> = {
+  deepseek: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return deepseekTranslate(t, f, to, k, s) },
+  openai: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openaiTranslate(t, f, to, k, s) },
+  gemini: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return geminiTranslate(t, f, to, k, s) },
+  claude: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return claudeTranslate(t, f, to, k, s) },
+  siliconflow: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return siliconflowTranslate(t, f, to, k, s) },
+  xiaomimimo: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return xiaomimimoTranslate(t, f, to, k, s) },
+  aliyunbailian: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return aliyunbailianTranslate(t, f, to, k, s) },
+  cerebras: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return cerebrasTranslate(t, f, to, k, s) },
+  zai: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return zaiTranslate(t, f, to, k, s) },
+  openrouter: (t, f, to, k, s) => { if (!k) throw new Error('API Key required'); return openrouterTranslate(t, f, to, k, s) },
+}
+
+export const FREE_TRANSLATORS: TranslatorConfig[] = FREE_META.map(m => ({
+  ...m,
+  translate: FREE_IMPL[m.id],
+}))
+
+export const SUBSCRIBE_TRANSLATORS: TranslatorConfig[] = SUBSCRIBE_META.map(m => ({
+  ...m,
+  translate: SUBSCRIBE_IMPL[m.id],
+}))
+
+export const AI_TRANSLATORS: TranslatorConfig[] = AI_META.map(m => ({
+  ...m,
+  translate: AI_IMPL[m.id],
+}))
 
 export const ALL_TRANSLATORS = [...FREE_TRANSLATORS, ...SUBSCRIBE_TRANSLATORS, ...AI_TRANSLATORS]
 
-// 自定义翻译 API（用户配置 URL + Key + Model）
+// 索引 Map：O(1) 查找
+export const TRANSLATOR_MAP: Map<string, TranslatorConfig> = new Map(ALL_TRANSLATORS.map(t => [t.id, t]))
+
+export function getTranslator(id: string): TranslatorConfig {
+  return TRANSLATOR_MAP.get(id) || FREE_TRANSLATORS[0]
+}
+
+// 自定义翻译 API
 export async function customTranslate(text: string, from: string, to: string, config: { url: string; key?: string; model?: string; prompt?: string }, signal?: AbortSignal): Promise<TranslateResult> {
   const { url, key, model, prompt } = config
   if (!url) throw new Error('Custom API URL required')
 
   const fromName = from === 'auto' ? 'auto-detected' : from
-  const toName = to
-  const systemPrompt = prompt || `You are a translator. Translate from ${fromName} to ${toName}. Output ONLY the translated text.`
+  const systemPrompt = prompt || `You are a translator. Translate from ${fromName} to ${to}. Output ONLY the translated text.`
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (key) headers['Authorization'] = `Bearer ${key}`
@@ -449,21 +467,68 @@ export async function customTranslate(text: string, from: string, to: string, co
 }
 
 // ============================================
-// 统一翻译入口
+// 缓存（LRU + TTL）
 // ============================================
 
 const CACHE_MAX = 500
-const cache = new Map<string, TranslateResult>()
-function cacheKey(text: string, from: string, to: string, api: string) { return `${api}|${from}|${to}|${text}` }
+const CACHE_TTL = 30 * 60 * 1000 // 30 分钟
+
+interface CacheEntry {
+  result: TranslateResult
+  ts: number
+}
+
+const cache = new Map<string, CacheEntry>()
+
+function customConfigHash(c?: { url: string; key?: string; model?: string; prompt?: string }): string {
+  if (!c) return ''
+  return `${c.url}|${c.model || ''}|${c.prompt || ''}`
+}
+
+function cacheKey(text: string, from: string, to: string, api: string, cHash = '') {
+  return `${api}|${from}|${to}|${cHash}|${text}`
+}
+
 function cacheGet(key: string): TranslateResult | undefined {
-  const val = cache.get(key)
-  if (val) { cache.delete(key); cache.set(key, val) } // LRU: 移到末尾
-  return val
+  const entry = cache.get(key)
+  if (!entry) return
+  if (Date.now() - entry.ts > CACHE_TTL) {
+    cache.delete(key)
+    return
+  }
+  cache.delete(key)
+  cache.set(key, entry)
+  return entry.result
 }
+
 function cacheSet(key: string, val: TranslateResult) {
-  if (cache.size >= CACHE_MAX) { const first = cache.keys().next().value; if (first) cache.delete(first) }
-  cache.set(key, val)
+  if (cache.size >= CACHE_MAX) {
+    const first = cache.keys().next().value
+    if (first) cache.delete(first)
+  }
+  cache.set(key, { result: val, ts: Date.now() })
 }
+
+// 组合 AbortSignal：外部 signal + 内部 timeout
+function withTimeout(signal?: AbortSignal, ms = 30000): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).timeout === 'function') {
+    const t = (AbortSignal as any).timeout(ms) as AbortSignal
+    if (!signal) return t
+    const ctrl = new AbortController()
+    const onAbort = (e: Event) => {
+      const s = e.target as AbortSignal
+      try { ctrl.abort(s.reason) } catch { ctrl.abort() }
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    t.addEventListener('abort', onAbort, { once: true })
+    return ctrl.signal
+  }
+  return signal
+}
+
+// ============================================
+// 统一翻译入口
+// ============================================
 
 export async function translateText(
   text: string,
@@ -474,16 +539,18 @@ export async function translateText(
   apiKey?: string,
   customConfig?: { url: string; key?: string; model?: string; prompt?: string },
 ): Promise<TranslateResult> {
-  const key = cacheKey(text, from, to, apiId)
+  const cHash = apiId === 'custom' ? customConfigHash(customConfig) : ''
+  const key = cacheKey(text, from, to, apiId, cHash)
   const cached = cacheGet(key)
   if (cached) return cached
 
+  const innerSignal = withTimeout(signal, 30000)
   let result: TranslateResult
   if (apiId === 'custom' && customConfig) {
-    result = await customTranslate(text, from, to, customConfig, signal)
+    result = await customTranslate(text, from, to, customConfig, innerSignal)
   } else {
-    const translator = ALL_TRANSLATORS.find(t => t.id === apiId) || FREE_TRANSLATORS[0]
-    result = await translator.translate(text, from, to, apiKey, signal)
+    const translator = getTranslator(apiId)
+    result = await translator.translate(text, from, to, apiKey, innerSignal)
   }
   result.api = apiId
 
@@ -501,8 +568,9 @@ export async function translateWithFallback(
   apiKey?: string,
   customConfig?: { url: string; key?: string; model?: string; prompt?: string },
 ): Promise<TranslateResult> {
-  const key = cacheKey(text, from, to, apiId + '_fb')
-  const cached = cache.get(key)
+  const cHash = apiId === 'custom' ? customConfigHash(customConfig) : ''
+  const key = cacheKey(text, from, to, apiId + '_fb', cHash)
+  const cached = cacheGet(key)
   if (cached) return cached
 
   try {
@@ -514,12 +582,13 @@ export async function translateWithFallback(
   for (const t of FREE_TRANSLATORS) {
     if (t.id === apiId) continue
     try {
-      const result = await t.translate(text, from, to, undefined, signal)
+      const innerSignal = withTimeout(signal, 30000)
+      const result = await t.translate(text, from, to, undefined, innerSignal)
       result.api = t.id
       cacheSet(key, result)
       return result
     } catch {}
   }
 
-  return { text: '翻译失败', srcLang: from.toUpperCase(), api: 'none' }
+  throw new Error('所有翻译源均失败')
 }

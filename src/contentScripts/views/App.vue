@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue'
-import { translateWithFallback, detectLang, getTargetLang, ALL_TRANSLATORS, FREE_TRANSLATORS, AI_TRANSLATORS } from '~/logic/translate'
-import { isValidWord, lookupDict, localDict, bingDict, type DictResult } from '~/logic/dict'
+import { ref, computed, onUnmounted } from 'vue'
+import { useStorage } from '~/composables/useStorage'
+import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
+import { useFavorites } from '~/composables/useFavorites'
+import { invokeTranslate, invokeLookupDict, type DictMode } from '~/logic/background-api'
+import { detectLang } from '~/logic/lang-utils'
+import { getMeta } from '~/logic/translators-meta'
+import { isValidWord, type DictResult } from '~/logic/dict'
 
 const MAX_SELECTION_LENGTH = 5000
 const POPUP_WIDTH = 340
@@ -10,7 +15,6 @@ const ICON_SIZE = 28
 const POPUP_MARGIN = 8
 const POPUP_ABOVE_OFFSET = 362
 const POPUP_BELOW_THRESHOLD = 200
-const HOVER_DELAY = 300
 const MOUSEUP_DELAY = 100
 
 const isOpen = ref(false)
@@ -21,8 +25,10 @@ const popupPos = ref({ x: 0, y: 0 })
 const sourceText = ref('')
 const translatedText = ref('')
 const detectedSrc = ref('')
-const currentApi = ref('microsoft')
-const apiKeys = ref<Record<string, string>>({})
+const currentApi = useStorage<string>('qt_api', 'microsoft')
+const apiKeys = useEncryptedKeys('qt_api_keys')
+const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
+const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const isWord = ref(false)
 const dictResult = ref<DictResult | null>(null)
 const dictLoading = ref(false)
@@ -30,7 +36,6 @@ const usedApi = ref('')
 const showLangMenu = ref(false)
 const transFrom = ref('auto')
 const transTo = ref('zh')
-const customApi = ref({ url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 
 const langMap: Record<string, string> = {
   'auto': '自动', 'zh': '中文', 'en': 'EN', 'ja': '日本語', 'ko': '한국어',
@@ -38,24 +43,7 @@ const langMap: Record<string, string> = {
 }
 
 let selectionRect: DOMRect | null = null
-let controller: AbortController | null = null
-let hoverTimer: ReturnType<typeof setTimeout> | null = null
-
-async function loadSettings() {
-  try {
-    const result = await chrome.storage.local.get(['qt_api', 'qt_api_keys', 'qt_custom_api'])
-    if (result.qt_api) currentApi.value = result.qt_api
-    if (result.qt_api_keys) apiKeys.value = result.qt_api_keys
-    if (result.qt_custom_api) customApi.value = result.qt_custom_api
-  } catch (e) { console.warn('[QT] loadSettings:', e) }
-}
-loadSettings()
-
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.qt_api) currentApi.value = changes.qt_api.newValue
-  if (changes.qt_api_keys) apiKeys.value = changes.qt_api_keys.newValue
-  if (changes.qt_custom_api) customApi.value = changes.qt_custom_api.newValue
-})
+let reqId = 0 // 防止翻译请求 race
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'translate-text' && message.text) {
@@ -103,7 +91,7 @@ function getCaretPosition(element: HTMLInputElement | HTMLTextAreaElement, offse
 }
 
 // ============================================
-// Selection detection: input/textarea, Shadow DOM (via getComposedRanges), regular page
+// Selection detection
 // ============================================
 
 function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaElement | null {
@@ -115,7 +103,6 @@ function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaEle
       if (tag === 'INPUT' || tag === 'TEXTAREA') return el as HTMLInputElement | HTMLTextAreaElement
     }
   } catch {}
-  // activeElement 穿透 shadow root（Chrome 扩展 composedPath 可能不可靠）
   let active: Element | null = document.activeElement
   while (active?.shadowRoot) active = active.shadowRoot.activeElement
   if (active && ((active as HTMLElement).tagName === 'INPUT' || (active as HTMLElement).tagName === 'TEXTAREA'))
@@ -123,15 +110,10 @@ function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaEle
   return null
 }
 
-// ============================================
-// Event handlers
-// ============================================
-
 function onMouseUp(event: MouseEvent) {
   if (isOpen.value) return
   if (event.button !== 0) return
 
-  // 在事件阶段立即查找 input（composedPath() 在 setTimeout 中可能失效）
   const inputElement = findInputElement(event)
 
   setTimeout(() => {
@@ -149,7 +131,6 @@ function onMouseUp(event: MouseEvent) {
 
 function getInputSelection(element: HTMLInputElement | HTMLTextAreaElement | null): { text: string; rect: DOMRect } | null {
   if (!element) return null
-
   const start = element.selectionStart ?? 0
   const end = element.selectionEnd ?? 0
   const text = element.value.substring(start, end).trim()
@@ -167,14 +148,12 @@ function getComposedSelection(): { text: string; rect: DOMRect } | null {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0) return null
 
-  // getComposedRanges() 穿透 Shadow DOM 边界，返回 StaticRange[]
   const composedRanges = selection.getComposedRanges()
   if (!composedRanges || composedRanges.length === 0) return null
 
   const staticRange = composedRanges[0]
   if (staticRange.collapsed) return null
 
-  // StaticRange 没有 getClientRects()，需要转换为完整 Range
   const range = new Range()
   range.setStart(staticRange.startContainer, staticRange.startOffset)
   range.setEnd(staticRange.endContainer, staticRange.endOffset)
@@ -189,9 +168,8 @@ function getComposedSelection(): { text: string; rect: DOMRect } | null {
   return { text, rect }
 }
 
-function calculatePopupPosition(): { x: number; y: number } {
+function calculatePopupIndex(): { x: number; y: number } {
   if (!selectionRect) return { x: POPUP_MARGIN, y: POPUP_MARGIN }
-
   const x = Math.max(POPUP_MARGIN, Math.min(selectionRect.left, window.innerWidth - POPUP_WIDTH - POPUP_MARGIN))
   const spaceBelow = window.innerHeight - selectionRect.bottom
   const spaceAbove = selectionRect.top
@@ -204,24 +182,23 @@ function calculatePopupPosition(): { x: number; y: number } {
 function onIconClick(event: MouseEvent) {
   event.stopPropagation()
   if (!sourceText.value) return
-
-  popupPos.value = calculatePopupPosition()
+  popupPos.value = calculatePopupIndex()
   doTranslate(sourceText.value)
 }
 
-function onIconMouseEnter() {
-  if (sourceText.value && !isOpen.value) {
-    hoverTimer = setTimeout(() => {
-      popupPos.value = calculatePopupPosition()
-      doTranslate(sourceText.value)
-    }, HOVER_DELAY)
-  }
+// ============================================
+// 收藏（composable 统一管理）
+// ============================================
+const { words: favWords, toggle: toggleFavFn } = useFavorites()
+const isFaved = computed(() => !!favWords.value[sourceText.value])
+function toggleFav() {
+  if (!sourceText.value) return
+  toggleFavFn(sourceText.value, translatedText.value)
 }
 
-function onIconMouseLeave() {
-  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
-}
-
+// ============================================
+// 翻译入口（通过 background）
+// ============================================
 async function doTranslate(text: string, overrideFrom?: string, overrideTo?: string) {
   isOpen.value = true
   loading.value = true
@@ -230,41 +207,63 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
   detectedSrc.value = ''
   dictResult.value = null
   isWord.value = false
-  checkFaved(text)
 
-  if (controller) controller.abort()
-  controller = new AbortController()
-  const signal = controller.signal
+  const myId = ++reqId
 
   const isEnglishWord = isValidWord(text)
-  const isChineseChar = text.length === 1 && /[\u4e00-\u9fa5]/.test(text)
+  const isChineseChar = text.length === 1 && /[一-鿿]/.test(text)
   isWord.value = isEnglishWord || isChineseChar
 
   const src = overrideFrom || (transFrom.value !== 'auto' ? transFrom.value : detectLang(text))
   const target = overrideTo || transTo.value || (src === 'zh' ? 'en' : 'zh')
   if (transFrom.value === 'auto') transFrom.value = src
 
-  const translatePromise = translateWithFallback(text, src, target, signal, currentApi.value, apiKeys.value[currentApi.value], customApi.value)
-    .then(result => {
-      if (!signal.aborted) {
-        translatedText.value = result.text
-        detectedSrc.value = result.srcLang
-        usedApi.value = result.api || currentApi.value
-      }
-    })
-    .catch(err => { if (err.name !== 'AbortError') error.value = '翻译失败' })
-
+  // 词典查询（与翻译独立，无 Key 也查）
   let dictPromise: Promise<void> = Promise.resolve()
   if (isEnglishWord) {
     dictLoading.value = true
-    dictPromise = lookupDict(text, signal)
-      .then(result => { if (!signal.aborted && result) dictResult.value = result })
+    dictPromise = invokeLookupDict({ text, mode: dictMode.value as DictMode })
+      .then(result => { if (myId === reqId && result) dictResult.value = result })
       .catch(() => {})
-      .finally(() => { if (!signal.aborted) dictLoading.value = false })
+      .finally(() => { if (myId === reqId) dictLoading.value = false })
   }
 
-  await Promise.all([translatePromise, dictPromise])
-  if (!signal.aborted) loading.value = false
+  // Key 缺失检测：词典仍可查，仅翻译被阻止
+  const meta = getMeta(currentApi.value)
+  const isCustom = currentApi.value === 'custom'
+  if (!isCustom && meta.needKey && !apiKeys.value[currentApi.value]) {
+    loading.value = false
+    error.value = `${meta.name} 需要配置 API Key（在设置中）`
+    await dictPromise
+    return
+  }
+  if (isCustom && !customApi.value.url) {
+    loading.value = false
+    error.value = '请在设置中配置自定义 API URL'
+    await dictPromise
+    return
+  }
+
+  invokeTranslate({
+    text, from: src, to: target,
+    api: currentApi.value,
+    apiKey: apiKeys.value[currentApi.value],
+    customConfig: isCustom ? customApi.value : undefined,
+  })
+    .then(result => {
+      if (myId !== reqId) return
+      translatedText.value = result.text
+      detectedSrc.value = result.srcLang
+      usedApi.value = result.api || currentApi.value
+    })
+    .catch(() => { if (myId === reqId) error.value = '翻译失败' })
+    .finally(() => { if (myId === reqId) loading.value = false })
+
+  await dictPromise
+}
+
+function playAudio(url: string) {
+  try { new Audio(url).play().catch(() => {}) } catch {}
 }
 
 function closePopup() {
@@ -273,7 +272,7 @@ function closePopup() {
   showLangMenu.value = false
   sourceText.value = ''
   dictResult.value = null
-  if (controller) { controller.abort(); controller = null }
+  reqId++ // 让进行中的请求作废
 }
 
 function retranslateWithLang() {
@@ -281,30 +280,17 @@ function retranslateWithLang() {
   if (sourceText.value) doTranslate(sourceText.value, transFrom.value, transTo.value)
 }
 
-const isFaved = ref(false)
-async function checkFaved(word: string) {
-  try {
-    const result = await chrome.storage.local.get('qt_words')
-    isFaved.value = !!(result.qt_words && result.qt_words[word])
-  } catch { isFaved.value = false }
-}
-async function toggleFav() {
-  if (!sourceText.value) return
-  try {
-    const result = await chrome.storage.local.get('qt_words')
-    const words = result.qt_words ? { ...result.qt_words } : {}
-    if (words[sourceText.value]) { delete words[sourceText.value]; isFaved.value = false }
-    else { words[sourceText.value] = { createdAt: Date.now(), translation: translatedText.value }; isFaved.value = true }
-    await chrome.storage.local.set({ qt_words: words })
-  } catch {}
-}
-
-function copyText() { navigator.clipboard.writeText(translatedText.value) }
-
 function onDocumentMousedown(event: MouseEvent) {
-  if (!isOpen.value) return
   const target = event.target as Element
-  if (!target?.closest?.('[data-qt-popup]') && !target?.closest?.('[data-qt-icon]')) closePopup()
+  // 点击在 icon/popup 内：不处理
+  if (target?.closest?.('[data-qt-popup]') || target?.closest?.('[data-qt-icon]')) return
+
+  // 点击在 icon/popup 外：关 popup（若开着），并清 sourceText 让 icon 消失
+  if (isOpen.value) {
+    closePopup()
+  } else if (sourceText.value) {
+    sourceText.value = ''
+  }
 }
 
 document.addEventListener('mouseup', onMouseUp)
@@ -316,7 +302,6 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onMouseUp)
   document.removeEventListener('mousedown', onDocumentMousedown)
   document.removeEventListener('keydown', onKeydown)
-  if (hoverTimer) clearTimeout(hoverTimer)
 })
 </script>
 
@@ -327,7 +312,6 @@ onUnmounted(() => {
       data-qt-icon class="qt-icon"
       :style="{ left: iconPos.x + 'px', top: iconPos.y + 'px' }"
       @mousedown.prevent @click="onIconClick"
-      @mouseenter="onIconMouseEnter" @mouseleave="onIconMouseLeave"
     >译</div>
 
     <div v-if="isOpen" data-qt-popup class="qt-popup"
@@ -367,9 +351,11 @@ onUnmounted(() => {
 
         <template v-if="isWord && dictResult">
           <div class="qt-dict-tag"><span class="qt-dict-badge">本地词典</span></div>
-          <div v-if="dictResult.phonetic" class="qt-phonetic">
-            <span v-if="dictResult.phonetic.uk" class="qt-phon-item">英 [{{ dictResult.phonetic.uk }}]</span>
-            <span v-if="dictResult.phonetic.us" class="qt-phon-item">美 [{{ dictResult.phonetic.us }}]</span>
+          <div v-if="dictResult.phonetic || dictResult.audio" class="qt-phonetic">
+            <span v-if="dictResult.phonetic?.uk" class="qt-phon-item">英 [{{ dictResult.phonetic.uk }}]</span>
+            <span v-if="dictResult.phonetic?.us" class="qt-phon-item">美 [{{ dictResult.phonetic.us }}]</span>
+            <button v-if="dictResult.audio?.uk" class="qt-audio-btn" @click.stop="playAudio(dictResult.audio.uk!)" title="英音发音">▶英</button>
+            <button v-if="dictResult.audio?.us" class="qt-audio-btn" @click.stop="playAudio(dictResult.audio.us!)" title="美音发音">▶美</button>
             <a class="qt-bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank" @click.stop>Bing ↗</a>
           </div>
           <div v-if="dictLoading" class="qt-loading"><span class="qt-spinner"></span> 补充词典...</div>
@@ -390,11 +376,17 @@ onUnmounted(() => {
         </template>
 
         <div class="qt-trans-tag">
-          <span class="qt-trans-badge">{{ (ALL_TRANSLATORS.find(t => t.id === usedApi)?.name || currentApi).toUpperCase() }}</span>
+          <span class="qt-trans-badge">{{ getMeta(usedApi).name.toUpperCase() }}</span>
         </div>
         <div v-if="loading" class="qt-loading"><span class="qt-spinner"></span> 翻译中...</div>
-        <div v-else-if="error" class="qt-error">{{ error }}</div>
-        <div v-else class="qt-result">{{ translatedText }}</div>
+        <div v-else-if="error" class="qt-error">
+          {{ error }}
+          <button v-if="!error.includes('设置')" class="qt-retry-btn" @click="doTranslate(sourceText)">重试</button>
+        </div>
+        <div v-else class="qt-result">
+          <span class="qt-result-text">{{ translatedText }}</span>
+          <button class="qt-copy-btn" @click="copyText" title="复制">复制</button>
+        </div>
       </div>
     </div>
   </div>

@@ -6,15 +6,10 @@ export interface FavWord {
   translation?: string
 }
 
-// 延迟初始化，避免模块级 useStorage 导致监听器泄漏
-let _words: Ref<Record<string, FavWord>> | null = null
-function getWords(): Ref<Record<string, FavWord>> {
-  if (!_words) _words = useStorage<Record<string, FavWord>>('qt_words', {})
-  return _words
-}
-
 export function useFavorites() {
-  const words = getWords()
+  // 每次调用都创建新的 useStorage：避免模块级单例在 mount→unmount→remount 时
+  // onUnmounted 把 listener 清掉后无法恢复。多个组件实例通过 chrome.storage.onChanged 自动同步。
+  const words = useStorage<Record<string, FavWord>>('qt_words', {})
 
   function toggle(word: string, translation?: string) {
     const w = { ...words.value }
@@ -34,6 +29,11 @@ export function useFavorites() {
     const w = { ...words.value }
     delete w[word]
     words.value = w
+  }
+
+  function setTranslation(word: string, translation: string) {
+    if (!words.value[word]) return
+    words.value = { ...words.value, [word]: { ...words.value[word], translation } }
   }
 
   function clear() {
@@ -65,5 +65,5 @@ export function useFavorites() {
 
   const count = computed(() => Object.keys(words.value).length)
 
-  return { words, list, count, toggle, has, remove, clear, exportList, importList }
+  return { words, list, count, toggle, has, remove, setTranslation, clear, exportList, importList }
 }

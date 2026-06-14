@@ -23,3 +23,6 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--qt-border); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--qt-primary); }
+
+/* 共享 spinner 动画：popup 和 options 复用，避免重复定义 */
+@keyframes spin { to { transform: rotate(360deg); } }

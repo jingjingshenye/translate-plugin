@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useStorage } from '~/composables/useStorage'
+import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
 import { useFavorites } from '~/composables/useFavorites'
-import { FREE_TRANSLATORS, SUBSCRIBE_TRANSLATORS, AI_TRANSLATORS, ALL_TRANSLATORS } from '~/logic/translate'
+import { FREE_META, SUBSCRIBE_META, AI_META, ALL_META } from '~/logic/translators-meta'
 
-// 设置
 const api = useStorage<string>('qt_api', 'microsoft')
 const fromLang = useStorage<string>('qt_from', 'auto')
 const toLang = useStorage<string>('qt_to', 'zh')
-const apiKeys = useStorage<Record<string, string>>('qt_api_keys', {})
-const dictMode = useStorage<string>('qt_dict_mode', 'local')
+const apiKeys = useEncryptedKeys('qt_api_keys')
+const apiModels = useStorage<Record<string, string>>('qt_api_models', {})
+const dictMode = useStorage<string>('qt_dict_mode', 'both')
 
-// 自定义 API 配置
 const customApi = useStorage('qt_custom_api', {
   url: '',
   key: '',
@@ -19,15 +19,17 @@ const customApi = useStorage('qt_custom_api', {
   prompt: '',
 })
 
-// 收藏
-const { list: favList, count: favCount, toggle: toggleFav, clear: clearFavs, exportList, importList } = useFavorites()
+const { list: favList, count: favCount, toggle: toggleFav, setTranslation: setFavTranslation, clear: clearFavs, exportList, importList } = useFavorites()
 
-// Tab
 const tab = ref<'api' | 'dict' | 'fav'>('api')
 const editingApi = ref<string>('')
 
 function setApiKey(id: string, key: string) {
   apiKeys.value = { ...apiKeys.value, [id]: key }
+}
+
+function setApiModel(id: string, model: string) {
+  apiModels.value = { ...apiModels.value, [id]: model }
 }
 
 // 收藏
@@ -56,7 +58,10 @@ const filteredWords = computed(() => {
 function removeWord(word: string) { toggleFav(word) }
 function clearAll() { if (confirm('确定清空所有收藏？')) clearFavs() }
 function startEdit(word: string) { editingWord.value = word; editTranslation.value = favList.value?.find(([w]) => w === word)?.[1]?.translation || '' }
-function saveEdit() { editingWord.value = '' }
+function saveEdit() {
+  if (editingWord.value) setFavTranslation(editingWord.value, editTranslation.value)
+  editingWord.value = ''
+}
 function copyWord(word: string) { navigator.clipboard.writeText(word) }
 
 function formatDate(ts: number) {
@@ -100,9 +105,9 @@ function download(content: string, name: string, type: string) {
           <div class="row">
             <label>引擎</label>
             <select v-model="api">
-              <optgroup label="免费"><option v-for="t in FREE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
-              <optgroup label="订阅源（需Key）"><option v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
-              <optgroup label="AI（需Key）"><option v-for="t in AI_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="免费"><option v-for="t in FREE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="订阅源（需Key）"><option v-for="t in SUBSCRIBE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="AI（需Key）"><option v-for="t in AI_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
               <option value="custom">自定义 API</option>
             </select>
           </div>
@@ -118,8 +123,8 @@ function download(content: string, name: string, type: string) {
 
         <section class="card">
           <h2>订阅源 API Key</h2>
-          <p class="hint" style="margin-bottom:12px">传统翻译接口，按量付费，翻译质量稳定</p>
-          <div v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" class="api-row">
+          <p class="hint" style="margin-bottom:12px">传统翻译接口，按量付费，翻译质量稳定。Key 本地 AES-GCM 加密存储。</p>
+          <div v-for="t in SUBSCRIBE_META" :key="t.id" class="api-row">
             <label>{{ t.name }}</label>
             <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
               @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
@@ -130,13 +135,19 @@ function download(content: string, name: string, type: string) {
 
         <section class="card">
           <h2>AI 翻译 API Key</h2>
-          <p class="hint" style="margin-bottom:12px">大语言模型翻译，支持上下文理解，适合复杂文本</p>
-          <div v-for="t in AI_TRANSLATORS" :key="t.id" class="api-row">
-            <label>{{ t.name }}</label>
-            <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
-              @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
-              @focus="editingApi = t.id" @blur="editingApi = ''"
-              :placeholder="t.name + ' API Key'" />
+          <p class="hint" style="margin-bottom:12px">大语言模型翻译，支持上下文理解。可自定义模型名（留空使用默认）。</p>
+          <div v-for="t in AI_META" :key="t.id" class="api-block">
+            <div class="api-row">
+              <label>{{ t.name }}</label>
+              <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
+                @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
+                @focus="editingApi = t.id" @blur="editingApi = ''"
+                :placeholder="t.name + ' API Key'" />
+            </div>
+            <div class="api-row api-row-model">
+              <label>模型</label>
+              <input :value="apiModels[t.id] || ''" @input="setApiModel(t.id, ($event.target as HTMLInputElement).value)" placeholder="留空使用默认模型" />
+            </div>
           </div>
         </section>
 
@@ -285,7 +296,7 @@ function download(content: string, name: string, type: string) {
     </main>
 
     <footer class="footer">
-      <p>Quick Translate v1.0.0 · {{ ALL_TRANSLATORS.length }}种翻译源</p>
+      <p>Quick Translate v1.0.0 · {{ ALL_META.length }}种翻译源 · API Key AES-GCM 加密</p>
     </footer>
   </div>
 </template>
@@ -319,7 +330,12 @@ function download(content: string, name: string, type: string) {
 .api-row input { flex: 1; padding: 6px 8px; background: #f8fbff; border: 1px solid rgba(56,189,248,0.15); border-radius: 5px; color: #0c4a6e; font-size: 12px; outline: none; }
 .api-row input:focus { border-color: #38bdf8; }
 
-/* 词典选项 */
+.api-block { padding: 10px 12px; background: #f8fbff; border: 1px solid rgba(56,189,248,0.1); border-radius: 8px; margin-bottom: 10px; }
+.api-block .api-row { margin-bottom: 6px; }
+.api-block .api-row:last-child { margin-bottom: 0; }
+.api-row-model label { color: #94a3b8; font-size: 11px; }
+.api-row-model input { font-size: 11px; padding: 4px 8px; }
+
 .dict-options { display: flex; flex-direction: column; gap: 8px; }
 .dict-option {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
@@ -342,13 +358,11 @@ function download(content: string, name: string, type: string) {
 .source-name { font-weight: 500; color: #0c4a6e; min-width: 70px; }
 .source-detail { color: #64748b; }
 
-/* 统计 */
 .stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
 .stat-card { flex: 1; background: #fff; border: 1px solid rgba(56,189,248,0.12); border-radius: 10px; padding: 14px; text-align: center; }
 .stat-num { font-size: 24px; font-weight: 700; color: #0ea5e9; }
 .stat-label { font-size: 11px; color: #94a3b8; margin-top: 2px; }
 
-/* 工具栏 */
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .search-box { flex: 1; min-width: 140px; position: relative; display: flex; align-items: center; }
 .search-icon { position: absolute; left: 8px; font-size: 12px; opacity: 0.5; }

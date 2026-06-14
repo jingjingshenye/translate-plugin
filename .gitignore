@@ -15,6 +15,10 @@ dist-ssr
 # Generated dictionary data
 extension/dict/
 
+# Build artifacts
+extension/dist/
+extension/manifest.json
+
 # Source dictionary CSV (too large for git)
 ecdict.csv
 ecdict.mini.csv

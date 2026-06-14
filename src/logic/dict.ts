@@ -35,8 +35,8 @@ async function loadDict(): Promise<LocalDict> {
       return _dictCache!
     } catch (e) {
       console.warn('[QT] Failed to load local dict:', e)
-      _dictCache = {}
-      return _dictCache
+      _dictCache = null // 失败时清空，允许下次重试
+      return {}
     } finally {
       _dictLoading = null
     }
@@ -141,17 +141,10 @@ export async function localDict(text: string): Promise<DictResult | null> {
   const dict = await loadDict()
   const key = text.toLowerCase().trim()
 
-  // 先查原词，再查词形还原
-  let entry = dict[key]
-  if (!entry) {
-    const lemma = await tryLemma(key, dict)
-    if (!lemma) return null
-    entry = dict[lemma]
-  }
-  // 如果命中的是词形条目（有 l 无 t），跳转到原形
-  if (entry.l && !entry.t) {
-    entry = dict[entry.l]
-  }
+  // 统一经 tryLemma 找到原形（同时处理直接命中词形条目和正则后备）
+  const lemma = await tryLemma(key, dict)
+  if (!lemma) return null
+  const entry = dict[lemma]
   if (!entry || !entry.t) return null
 
   const definitions: DictResult['definitions'] = []
@@ -196,7 +189,7 @@ export async function bingDict(text: string, signal?: AbortSignal): Promise<Dict
   const url = `${host}/dict/search?q=${encodeURIComponent(text)}&FORM=BDVSP6&cc=cn`
 
   try {
-    const res = await fetch(url, { signal, credentials: 'include' })
+    const res = await fetch(url, { signal })
     if (!res.ok) return null
     const html = await res.text()
 
@@ -370,7 +363,12 @@ export async function lookupDict(text: string, signal?: AbortSignal): Promise<Di
   }
 
   // 2. 本地没有，查在线词典
-  const result = await bingDict(text, signal)
-  if (result && result.definitions?.length) return result
+  return onlineLookup(text, signal)
+}
+
+// 仅在线查询（Bing 优先，失败 fallback 到有道）
+export async function onlineLookup(text: string, signal?: AbortSignal): Promise<DictResult | null> {
+  const bing = await bingDict(text, signal)
+  if (bing?.definitions?.length) return bing
   return youdaoDict(text, signal)
 }

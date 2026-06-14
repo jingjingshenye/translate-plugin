@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { translateWithFallback, FREE_TRANSLATORS, SUBSCRIBE_TRANSLATORS, AI_TRANSLATORS, ALL_TRANSLATORS, detectLang, getTargetLang } from '~/logic/translate'
 import { useStorage } from '~/composables/useStorage'
-import { isValidWord, lookupDict, localDict, bingDict, type DictResult } from '~/logic/dict'
+import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
+import { invokeTranslate, invokeLookupDict, type DictMode } from '~/logic/background-api'
+import { detectLang, getTargetLang } from '~/logic/lang-utils'
+import { FREE_META, SUBSCRIBE_META, AI_META, getMeta } from '~/logic/translators-meta'
+import { isValidWord, type DictResult } from '~/logic/dict'
 
 const inputText = ref('')
 const result = ref('')
@@ -14,11 +17,10 @@ const usedApi = ref('')
 const fromLang = useStorage<string>('qt_from', 'auto')
 const toLang = useStorage<string>('qt_to', 'zh')
 const currentApi = useStorage<string>('qt_api', 'microsoft')
-const apiKeys = useStorage<Record<string, string>>('qt_api_keys', {})
-const dictMode = useStorage<string>('qt_dict_mode', 'local')
+const apiKeys = useEncryptedKeys('qt_api_keys')
+const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 
-// 词典
 const isWord = ref(false)
 const dictResult = ref<DictResult | null>(null)
 const dictLoading = ref(false)
@@ -44,27 +46,47 @@ async function doTranslate() {
   const word = isValidWord(text)
   isWord.value = word
 
-  // 翻译
+  // Key 缺失检测
+  const meta = getMeta(currentApi.value)
+  const isCustom = currentApi.value === 'custom'
+  if (!isCustom && meta.needKey && !apiKeys.value[currentApi.value]) {
+    loading.value = false
+    error.value = `${meta.name} 需要配置 API Key（点⚙进入设置）`
+    return
+  }
+  if (isCustom && !customApi.value.url) {
+    loading.value = false
+    error.value = '请在设置中配置自定义 API URL'
+    return
+  }
+
   let from = fromLang.value, to = toLang.value
   if (from === 'auto') { from = detectLang(text); to = getTargetLang(from) }
 
-  const translatePromise = translateWithFallback(text, from, to, undefined, currentApi.value, apiKeys.value[currentApi.value], customApi.value)
-    .then(res => { result.value = res.text; detectedSrc.value = res.srcLang; usedApi.value = res.api || currentApi.value })
+  invokeTranslate({
+    text, from, to,
+    api: currentApi.value,
+    apiKey: apiKeys.value[currentApi.value],
+    customConfig: isCustom ? customApi.value : undefined,
+  })
+    .then(res => {
+      result.value = res.text
+      detectedSrc.value = res.srcLang
+      usedApi.value = res.api || currentApi.value
+    })
     .catch(() => { error.value = '翻译失败' })
     .finally(() => { loading.value = false })
 
-  // 词典
   if (word) {
-    if (dictMode.value === 'local') {
-      localDict(text).then(local => { if (local) dictResult.value = local }).catch(() => {})
-    } else if (dictMode.value === 'online') {
-      dictLoading.value = true
-      bingDict(text).then(r => { if (r) dictResult.value = r }).finally(() => { dictLoading.value = false })
-    } else {
-      dictLoading.value = true
-      lookupDict(text).then(r => { if (r) dictResult.value = r }).finally(() => { dictLoading.value = false })
-    }
+    dictLoading.value = true
+    invokeLookupDict({ text, mode: dictMode.value as DictMode })
+      .then(r => { if (r) dictResult.value = r })
+      .finally(() => { dictLoading.value = false })
   }
+}
+
+function playAudio(url: string) {
+  try { new Audio(url).play().catch(() => {}) } catch {}
 }
 
 async function copyResult() {
@@ -85,14 +107,15 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 
     <div class="body">
       <select v-model="currentApi" class="sel api-sel">
-        <optgroup label="免费"><option v-for="t in FREE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
-        <optgroup label="订阅"><option v-for="t in SUBSCRIBE_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
-        <optgroup label="AI"><option v-for="t in AI_TRANSLATORS" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="免费"><option v-for="t in FREE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="订阅"><option v-for="t in SUBSCRIBE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="AI"><option v-for="t in AI_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <option value="custom">自定义 API</option>
       </select>
 
       <div class="lang-row">
         <select v-model="fromLang" class="sel"><option value="auto">自动</option><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select>
-        <span class="swap" @click="swapLang">⇄</span>
+        <span class="swap" :class="{ 'swap-disabled': fromLang === 'auto' }" @click="swapLang" :title="fromLang === 'auto' ? '自动检测时不支持交换' : '交换语言'">⇄</span>
         <select v-model="toLang" class="sel"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select>
       </div>
 
@@ -105,13 +128,14 @@ function openOptions() { chrome.runtime.openOptionsPage() }
         </button>
       </div>
 
-      <!-- 词典结果 -->
       <template v-if="isWord && dictResult">
         <div class="section">
           <div class="section-tag tag-green">📚 本地词典 · ECDICT</div>
-          <div v-if="dictResult.phonetic" class="phonetic">
-            <span v-if="dictResult.phonetic.uk" class="phon">英 [{{ dictResult.phonetic.uk }}]</span>
-            <span v-if="dictResult.phonetic.us" class="phon">美 [{{ dictResult.phonetic.us }}]</span>
+          <div v-if="dictResult.phonetic || dictResult.audio" class="phonetic">
+            <span v-if="dictResult.phonetic?.uk" class="phon">英 [{{ dictResult.phonetic.uk }}]</span>
+            <span v-if="dictResult.phonetic?.us" class="phon">美 [{{ dictResult.phonetic.us }}]</span>
+            <button v-if="dictResult.audio?.uk" class="audio-btn" @click="playAudio(dictResult.audio.uk!)" title="英音">▶英</button>
+            <button v-if="dictResult.audio?.us" class="audio-btn" @click="playAudio(dictResult.audio.us!)" title="美音">▶美</button>
             <a class="bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank">Bing ↗</a>
           </div>
           <div v-if="dictResult.definitions?.length" class="defs">
@@ -131,15 +155,18 @@ function openOptions() { chrome.runtime.openOptionsPage() }
       </template>
       <div v-if="dictLoading" class="dict-loading"><span class="spinner"></span> 查询词典...</div>
 
-      <!-- 翻译结果 -->
       <div v-if="result" class="result">
         <div class="result-bar">
-          <span class="tag-blue">🌐 {{ (ALL_TRANSLATORS.find(t => t.id === usedApi)?.name || currentApi).toUpperCase() }}<em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
+          <span class="tag-blue">🌐 {{ getMeta(usedApi).name.toUpperCase() }}<em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
+          <button class="copy-btn" @click="copyResult">{{ copied ? '✓' : '复制' }}</button>
         </div>
         <div class="result-text">{{ result }}</div>
       </div>
 
-      <div v-if="error" class="error">{{ error }}</div>
+      <div v-if="error" class="error">
+        {{ error }}
+        <button v-if="!error.includes('设置')" class="retry-btn" @click="doTranslate">重试</button>
+      </div>
     </div>
   </div>
 </template>
@@ -163,8 +190,10 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 .sel:focus { border-color: #38bdf8; }
 .sel option, .sel optgroup { background: #f0f9ff; color: #0c4a6e; }
 
-.swap { cursor: pointer; font-size: 16px; color: #0ea5e9; opacity: 0.7; user-select: none; }
+.swap { cursor: pointer; font-size: 16px; color: #0ea5e9; opacity: 0.7; user-select: none; transition: opacity 0.15s; }
 .swap:hover { opacity: 1; }
+.swap-disabled { opacity: 0.3; cursor: not-allowed; }
+.swap-disabled:hover { opacity: 0.3; }
 
 textarea { width: 100%; padding: 8px 10px; background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 6px; color: #0c4a6e; font-size: 13px; line-height: 1.5; resize: vertical; font-family: inherit; outline: none; }
 textarea:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.1); }
@@ -178,15 +207,16 @@ textarea::placeholder { color: #64748b; }
 .btn-go:hover:not(:disabled) { box-shadow: 0 0 14px rgba(56,189,248,0.5); }
 
 .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .section { background: #fff; border: 1px solid rgba(56,189,248,0.2); border-radius: 8px; padding: 10px 12px; }
 .section-tag { font-size: 9px; font-weight: 600; letter-spacing: .5px; padding: 2px 6px; border-radius: 3px; display: inline-block; margin-bottom: 8px; }
 .tag-green { color: #10b981; background: rgba(16,185,129,0.1); }
 .tag-blue { color: #3b82f6; background: rgba(59,130,246,0.1); padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; letter-spacing: .5px; }
 
-.phonetic { display: flex; gap: 12px; margin-bottom: 6px; align-items: center; }
+.phonetic { display: flex; gap: 12px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
 .phon { font-size: 12px; color: #0c4a6e; }
+.audio-btn { padding: 2px 8px; font-size: 10px; border: 1px solid rgba(56,189,248,0.25); background: transparent; color: #0ea5e9; border-radius: 3px; cursor: pointer; transition: all 0.15s; }
+.audio-btn:hover { background: rgba(56,189,248,0.1); }
 .bing-link { font-size: 10px; color: #0ea5e9; text-decoration: none; margin-left: 6px; opacity: .7; transition: opacity .15s; }
 .bing-link:hover { opacity: 1; text-decoration: underline; }
 
@@ -210,5 +240,7 @@ textarea::placeholder { color: #64748b; }
 .copy-btn:hover { background: rgba(56,189,248,0.1); }
 .result-text { padding: 10px; color: #0c4a6e; line-height: 1.6; max-height: 180px; overflow-y: auto; word-break: break-all; }
 
-.error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; }
+.error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.retry-btn { padding: 3px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #dc2626; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
+.retry-btn:hover { background: rgba(239,68,68,0.2); }
 </style>
