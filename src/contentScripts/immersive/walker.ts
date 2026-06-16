@@ -28,6 +28,24 @@ const PLAIN_LANG_CODES = new Set([
   'csv', 'log', 'diff',
 ])
 
+const OBSERVE_ATTR = 'data-qt-immersive-observe'
+
+const BUILTIN_EXCLUDES = [
+  '[data-qt]', '[data-qt-immersive]',
+  'nav', 'header', 'footer',
+  '.sidebar', '.side-bar', '#sidebar',
+  '.ad', '.ads', '.advert', '[class*="ad-"]', '[class*="ads-"]',
+  '[id*="google_ads"]', '[id*="carbonads"]',
+  '.comments', '#comments', '.comment-section',
+  '.related-posts', '.recommended',
+  '.social-share', '.share-buttons',
+  '.newsletter', '.subscribe-form',
+  '.cookie-banner', '.cookie-consent',
+  '.popup-overlay', '.modal-overlay',
+  '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+  '[aria-hidden="true"]',
+]
+
 function getCodeLanguage(el: Element): string | null {
   const codeEl = el.tagName === 'CODE' ? el : el.querySelector('code')
   const target = codeEl || el
@@ -53,6 +71,14 @@ function isCodeBlockLanguage(el: Element): 'programming' | 'plain' | 'none' {
 }
 
 let blockCache = new WeakMap<Node, { el: Element; isCode: boolean } | null>()
+let excludeSelectors: string[] = []
+
+function isExcluded(el: Element): boolean {
+  for (const sel of excludeSelectors) {
+    try { if (el.closest(sel)) return true } catch {}
+  }
+  return false
+}
 
 function closestBlockAncestor(node: Node): { el: Element; isCode: boolean } | null {
   const cached = blockCache.get(node)
@@ -142,8 +168,10 @@ function walkTextNodes(root: Node, onNode: (node: Text) => void) {
   }
 }
 
-export function collectTextBlocks(): TextBlock[] {
+export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBlock[] {
   blockCache = new WeakMap()
+  excludeSelectors = [...BUILTIN_EXCLUDES, ...userExcludeSelectors]
+
   const blocks: TextBlock[] = []
   const seen = new Set<string>()
   const groups = new Map<Element, { text: string; node: Text; isCode: boolean }[]>()
@@ -154,6 +182,8 @@ export function collectTextBlocks(): TextBlock[] {
 
     const block = closestBlockAncestor(node)
     if (!block) return
+
+    if (isExcluded(block.el)) return
 
     const key = block.isCode ? `code:${trimmed.toLowerCase()}` : trimmed.toLowerCase()
     if (seen.has(key)) return
@@ -170,6 +200,7 @@ export function collectTextBlocks(): TextBlock[] {
   for (const [element, items] of groups) {
     const combined = items.map(i => i.text).join(' ')
     if (combined.length < 2) continue
+    element.setAttribute(OBSERVE_ATTR, '')
     blocks.push({
       id: blockId++,
       text: combined,
@@ -194,6 +225,8 @@ export function collectTextBlocks(): TextBlock[] {
           const block = closestBlockAncestor(node)
           if (!block) return
 
+          if (isExcluded(block.el)) return
+
           const key = block.isCode ? `code:${trimmed.toLowerCase()}` : trimmed.toLowerCase()
           if (seen.has(key)) return
           seen.add(key)
@@ -209,6 +242,7 @@ export function collectTextBlocks(): TextBlock[] {
         for (const [element, items] of iframeGroups) {
           const combined = items.map(i => i.text).join(' ')
           if (combined.length < 2) continue
+          element.setAttribute(OBSERVE_ATTR, '')
           blocks.push({
             id: blockId++,
             text: combined,
@@ -222,6 +256,10 @@ export function collectTextBlocks(): TextBlock[] {
   } catch {}
 
   return blocks
+}
+
+export function unmarkAllObserved() {
+  document.querySelectorAll(`[${OBSERVE_ATTR}]`).forEach(el => el.removeAttribute(OBSERVE_ATTR))
 }
 
 export function resetBlockId() {

@@ -13,6 +13,7 @@ const apiModels = useStorage<Record<string, string>>('qt_api_models', {})
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<'bilingual' | 'translated-only'>('qt_immersive_mode', 'bilingual')
+const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 
 const customApi = useStorage('qt_custom_api', {
   url: '',
@@ -197,6 +198,16 @@ function download(content: string, name: string, type: string) {
               <option value="bilingual">双语对照（原文+译文）</option>
               <option value="translated-only">仅显示译文</option>
             </select>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>排除选择器</h2>
+          <p class="hint" style="margin-bottom:8px">指定不翻译的区域（每行一个 CSS 选择器）。内置排除：导航栏、广告、评论区、侧边栏等。</p>
+          <textarea v-model="immersiveExclude" rows="4" placeholder="例如：&#10;.my-sidebar&#10;#ad-container&#10;.code-block" style="width:100%;padding:8px;background:#f8fbff;border:1px solid rgba(56,189,248,.15);border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;outline:none;color:#0c4a6e"></textarea>
+          <div style="margin-top:8px">
+            <div class="hint" style="margin-bottom:4px"><strong>内置排除规则（始终生效）：</strong></div>
+            <div class="hint" style="font-family:monospace;font-size:10px;line-height:1.6;word-break:break-all">nav, header, footer, .sidebar, .ad, .ads, .advert, [class*="ad-"], [id*="google_ads"], .comments, #comments, .related-posts, .social-share, .newsletter, .cookie-banner, .popup-overlay, [role="navigation"], [aria-hidden="true"]</div>
           </div>
         </section>
 

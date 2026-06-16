@@ -1,9 +1,10 @@
-import { collectTextBlocks, resetBlockId } from './walker'
+import { collectTextBlocks, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
 import { translateBlocks, type ImmersiveProgress } from './translator'
 import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal } from './injector'
 import { getMeta } from '~/logic/translators-meta'
 
 type ImmersiveMode = 'bilingual' | 'translated-only'
+type BlockState = 'pending' | 'queued' | 'translating' | 'done'
 
 let state: 'idle' | 'translating' | 'done' = 'idle'
 let mode: ImmersiveMode = 'bilingual'
@@ -12,8 +13,17 @@ let abortController: AbortController | null = null
 let panelEl: HTMLElement | null = null
 let apiNameCache = ''
 let showOriginal = true
+let excludeSelectors: string[] = []
+
+let observer: IntersectionObserver | null = null
+const blockStates = new Map<number, BlockState>()
+let allBlocks: TextBlock[] = []
+let translateQueue: TextBlock[] = []
+let processing = false
+let apiConfig: { api: string; apiKey?: string; customConfig?: any } = { api: 'microsoft' }
 
 const PANEL_ID = 'qt-immersive-status-panel'
+const BATCH_SIZE = 5
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -83,10 +93,17 @@ function renderPanel() {
 function cleanup() {
   abortController?.abort()
   abortController = null
+  observer?.disconnect()
+  observer = null
   removeAllTranslations()
+  unmarkAllObserved()
   state = 'idle'
   progress = { total: 0, done: 0, failed: 0 }
   showOriginal = true
+  blockStates.clear()
+  allBlocks = []
+  translateQueue = []
+  processing = false
   removePanel()
 }
 
@@ -97,7 +114,86 @@ function reportProgress() {
   }).catch(() => {})
 }
 
-async function handleTranslate(payload: { api: string; apiKey?: string; customConfig?: any; mode: ImmersiveMode }) {
+function setupObserver() {
+  observer?.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      const id = parseInt((entry.target as HTMLElement).dataset.qtImmersiveObserve || '-1')
+      if (id >= 0 && blockStates.get(id) === 'pending') {
+        blockStates.set(id, 'queued')
+        const block = allBlocks.find(b => b.id === id)
+        if (block) translateQueue.push(block)
+      }
+    }
+    if (translateQueue.length > 0 && !processing) processQueue()
+  }, { rootMargin: '200px' })
+
+  for (const block of allBlocks) {
+    observer.observe(block.element)
+  }
+}
+
+async function processQueue() {
+  if (processing) return
+  processing = true
+
+  while (translateQueue.length > 0) {
+    if (abortController?.signal.aborted) break
+
+    const batch = translateQueue.splice(0, BATCH_SIZE)
+    const texts = batch.map(b => b.text)
+
+    try {
+      const res = await new Promise<{ results: (any | null)[] }>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('timeout')), 60000)
+        chrome.runtime.sendMessage({
+          type: 'qt-batch-translate',
+          payload: { texts, from: 'auto', to: 'zh', api: apiConfig.api, apiKey: apiConfig.apiKey, customConfig: apiConfig.customConfig },
+        }).then(r => { clearTimeout(timeout); resolve(r) }).catch(reject)
+      })
+
+      const results = res?.results || []
+      for (let i = 0; i < batch.length; i++) {
+        const block = batch[i]
+        const result = results[i]
+        if (result?.text) {
+          injectTranslation(block.id, result.text, mode, block.isCode)
+        } else {
+          progress.failed++
+        }
+        blockStates.set(block.id, 'done')
+        progress.done++
+      }
+      renderPanel()
+      reportProgress()
+    } catch {
+      for (const block of batch) {
+        blockStates.set(block.id, 'done')
+        progress.done++
+        progress.failed++
+      }
+      renderPanel()
+      reportProgress()
+    }
+  }
+
+  processing = false
+  checkDone()
+}
+
+function checkDone() {
+  if (state !== 'translating') return
+  for (const s of blockStates.values()) {
+    if (s === 'pending' || s === 'queued' || s === 'translating') return
+  }
+  state = 'done'
+  if (mode === 'translated-only') { showOriginal = false; toggleOriginal(false) }
+  renderPanel()
+  reportProgress()
+}
+
+async function handleTranslate(payload: { api: string; apiKey?: string; customConfig?: any; mode: ImmersiveMode; all?: boolean }) {
   if (state === 'translating') return
 
   cleanup()
@@ -106,51 +202,39 @@ async function handleTranslate(payload: { api: string; apiKey?: string; customCo
   showOriginal = true
   progress = { total: 0, done: 0, failed: 0 }
   apiNameCache = getMeta(payload.api).name
+  apiConfig = { api: payload.api, apiKey: payload.apiKey, customConfig: payload.customConfig }
   resetBlockId()
   createPanel()
   reportProgress()
 
-  const collected = collectTextBlocks()
-  if (collected.length === 0) {
+  allBlocks = collectTextBlocks(excludeSelectors)
+  if (allBlocks.length === 0) {
     state = 'idle'
     removePanel()
     reportProgress()
     return
   }
 
-  progress = { total: collected.length, done: 0, failed: 0 }
-  for (const block of collected) markSourceBlock(block.id, block.element)
+  progress = { total: allBlocks.length, done: 0, failed: 0 }
+  for (const block of allBlocks) {
+    markSourceBlock(block.id, block.element)
+    blockStates.set(block.id, 'pending')
+    block.element.setAttribute('data-qt-immersive-observe', String(block.id))
+  }
 
   abortController = new AbortController()
 
-  try {
-    await translateBlocks(collected, {
-      from: 'auto', to: 'zh',
-      api: payload.api,
-      apiKey: payload.apiKey,
-      customConfig: payload.customConfig,
-      onTranslated(blockId, text, isCode) {
-        injectTranslation(blockId, text, mode, isCode)
-      },
-      onProgress(p) { progress = p; renderPanel(); reportProgress() },
-      signal: abortController.signal,
-    })
-
-    if (!abortController?.signal.aborted) {
-      state = 'done'
-      if (mode === 'translated-only') { showOriginal = false; toggleOriginal(false) }
-      renderPanel()
-    }
-  } catch {
-    cleanup()
-  } finally {
-    abortController = null
-    reportProgress()
+  if (payload.all) {
+    translateQueue = allBlocks.slice()
+    processQueue()
+  } else {
+    setupObserver()
   }
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'qt-immersive-translate') {
+    excludeSelectors = msg.payload.excludeSelectors || []
     handleTranslate(msg.payload)
     return
   }

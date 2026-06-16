@@ -106,6 +106,7 @@ const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<ImmersiveMode>('qt_immersive_mode', 'bilingual')
 const immersiveKeys = useEncryptedKeys('qt_api_keys')
 const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
+const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 
 const immersiveState = ref<ImmersiveState>('idle')
 const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
@@ -134,7 +135,7 @@ onMounted(() => {
 })
 onUnmounted(() => chrome.runtime.onMessage.removeListener(onImmersiveProgress))
 
-async function startImmersive() {
+async function startImmersive(all = false) {
   const api = effectiveImmersiveApi.value
   const meta = getMeta(api)
   const isCustom = api === 'custom'
@@ -148,6 +149,8 @@ async function startImmersive() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!activeTab?.id) return
 
+  const excludeSelectors = immersiveExclude.value.split('\n').map(s => s.trim()).filter(Boolean)
+
   try {
     await chrome.tabs.sendMessage(activeTab.id, {
       type: 'qt-immersive-translate',
@@ -156,6 +159,8 @@ async function startImmersive() {
         apiKey: immersiveKeys.value[api],
         customConfig: isCustom ? immersiveCustom.value : undefined,
         mode: immersiveMode.value,
+        all,
+        excludeSelectors,
       },
     })
     immersiveState.value = 'translating'
@@ -270,8 +275,8 @@ async function cancelImmersive() {
         <button :class="['mode-btn', { active: immersiveMode === 'translated-only' }]" @click="immersiveMode = 'translated-only'">仅译文</button>
       </div>
 
-      <div v-if="immersiveState === 'idle'" class="immersive-hint">
-        点击按钮翻译当前页面，译文将直接显示在页面上。
+      <div class="immersive-hint">
+        翻译可视区域，滚动页面时自动翻译新内容。
       </div>
 
       <div v-if="immersiveState === 'translating'" class="immersive-progress">
@@ -284,8 +289,13 @@ async function cancelImmersive() {
       </div>
 
       <div class="actions">
-        <button v-if="immersiveState === 'translating'" class="btn btn-clear" @click="cancelImmersive">取消</button>
-        <button v-else class="btn btn-go" @click="startImmersive">翻译此页面</button>
+        <template v-if="immersiveState === 'translating'">
+          <button class="btn btn-clear" @click="cancelImmersive">取消</button>
+        </template>
+        <template v-else>
+          <button class="btn btn-go" @click="startImmersive(false)">翻译可视区域</button>
+          <button class="btn btn-clear" @click="startImmersive(true)">翻译全部</button>
+        </template>
       </div>
     </div>
   </div>
