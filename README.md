@@ -4,10 +4,10 @@
 
 ## 功能
 
-- **划词翻译** — 选中文字出现翻译图标，点击或悬停查看翻译和词典释义
-- **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字触发翻译
+- **划词翻译** — 选中文字出现翻译图标，点击查看翻译和词典释义
+- **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字
 - **弹窗翻译** — 点击插件图标，输入文本翻译
-- **沉浸式翻译** — 整页翻译，支持双语对照 / 仅译文模式
+- **沉浸式翻译** — 整页翻译，支持双语对照 / 仅译文，可视区域懒加载
 - **20+ 翻译源**
   - 免费：Microsoft / Google / 腾讯 / 火山 / 百度 / DeepL Free
   - 订阅：腾讯云 / 百度翻译 API / Google API / DeepL API
@@ -23,7 +23,7 @@
 
 ### 从 Release 下载
 
-1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.0.0.zip`
+1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.1.0.zip`
 2. 解压
 3. Chrome 打开 `chrome://extensions/`
 4. 开启「开发者模式」→「加载已解压的扩展程序」→ 选择 `extension` 文件夹
@@ -35,7 +35,7 @@ git clone https://github.com/jingjingshenye/translate-plugin.git
 cd translate-plugin
 npm install
 npm run dict   # 生成词典（需要 ecdict.csv 放在根目录）
-npm run icons # 生成图标
+npm run icons  # 生成图标
 npm run build
 ```
 
@@ -62,14 +62,14 @@ npm run build
 
 ## 沉浸式翻译
 
-整页翻译功能，在插件弹窗的「全文翻译」tab 中触发，译文直接显示在页面上。
+整页翻译功能，在插件弹窗的「全文翻译」tab 中触发。支持可视区域懒加载和排除规则。
 
 ### 使用方式
 
 1. 打开任意英文网页，点击插件图标打开弹窗
-2. 切换到「全文翻译」tab，选择翻译模式
-3. 点击「翻译此页面」，页面右下角出现小型控制面板
-4. 翻译完成后可切换模式、显示/隐藏原文、清除译文
+2. 切换到「全文翻译」tab，选择翻译模式和引擎
+3. 点击「翻译可视区域」（懒加载）或「翻译全部」
+4. 页面右下角出现控制面板，可切换模式、显示/隐藏原文、清除译文
 
 ### 翻译模式
 
@@ -78,9 +78,25 @@ npm run build
 | 双语对照 | 原文下方显示译文，蓝色竖线标记 |
 | 仅译文 | 隐藏原文，只显示中文译文 |
 
-### 翻译引擎
+### 懒加载
 
-可在设置中为沉浸式翻译单独选择引擎，或跟随默认设置。整页翻译建议使用免费引擎（Google / Microsoft），速度快且无成本。
+默认使用 IntersectionObserver 懒加载：只翻译可视区域内的文本块，滚动页面时自动翻译新进入视口的内容。也可以点击「翻译全部」一次性翻译整个页面。
+
+### 排除规则
+
+在设置页「沉浸式翻译」tab 中可配置自定义 CSS 选择器（每行一个），指定不翻译的区域。
+
+内置排除规则（始终生效）：
+
+| 分类 | 选择器 |
+|------|--------|
+| 页面结构 | `nav`, `header`, `footer`, `[role="navigation"]`, `[role="banner"]`, `[role="contentinfo"]` |
+| 侧边栏 | `.sidebar`, `.side-bar`, `#sidebar` |
+| 广告 | `.ad`, `.ads`, `.advert`, `[class*="ad-"]`, `[class*="ads-"]`, `[id*="google_ads"]`, `[id*="carbonads"]` |
+| 评论区 | `.comments`, `#comments`, `.comment-section` |
+| 推荐/社交 | `.related-posts`, `.recommended`, `.social-share`, `.share-buttons` |
+| 订阅/弹窗 | `.newsletter`, `.subscribe-form`, `.cookie-banner`, `.cookie-consent`, `.popup-overlay`, `.modal-overlay` |
+| 其他 | `[aria-hidden="true"]`, `[data-qt]`, `[data-qt-immersive]` |
 
 ### 代码块处理
 
@@ -99,44 +115,57 @@ npm run build
 
 ### Shadow DOM / iframe
 
-- **Shadow DOM**：自动遍历 Shadow Root 内的文本节点并翻译，译文通过 Map 引用管理（不依赖 document.querySelector）
+- **Shadow DOM**：自动遍历 Shadow Root 内的文本节点并翻译，译文通过 Map 引用管理
 - **iframe**：支持同源 iframe 内容翻译（跨域 iframe 因浏览器安全限制无法访问）
+
+### SPA 兼容
+
+自动检测 SPA 路由变化（`pushState` / `replaceState` / `popstate`），页面切换时自动清除旧翻译。适用于 GitHub、Twitter、掘金等单页应用。
+
+### 段落级合并
+
+同一 block 元素（`<p>`、`<h1>`-`<h6>`、`<li>` 等）内的多个文本节点会合并为一条翻译请求，减少 API 调用次数，翻译质量更高（上下文更完整）。
 
 ### 技术实现
 
 ```
-页面加载
+弹窗「全文翻译」tab
+  ↓
+发送 qt-immersive-translate 到 content script
   ↓
 TreeWalker 遍历文本节点（含 Shadow DOM 递归）
   ↓
-按块级元素聚合 + 去重 + 语言检测过滤
+排除选择器过滤 + 按块级元素聚合 + 去重
   ↓
-批量发送到 background（并发 3 路，每批 5 条）
+IntersectionObserver 注册（懒加载模式）
+  ↓
+可视区域块进入视口 → 批量发送到 background（每批 5 条）
   ↓
 background 调用翻译 API（复用已有引擎 + fallback）
   ↓
-content script 收到译文 → 注入到 DOM
+译文注入 DOM（双语 div / code 内联 span）
 ```
 
 ## 架构
 
 ```
-用户操作              Background Service Worker         外部 API
-─────────            ──────────────────────────        ────────
-划词翻译    ──msg──►  translateWithFallback    ──►     Microsoft / Google /
-弹窗翻译    ──msg──►  （LRU 缓存 + 30s 超时 +           腾讯 / 百度 / DeepL /
-右键菜单    ──msg──►  fallback）                        OpenAI / Claude / ...
-沉浸式翻译  ──msg──►  batchTranslate（并发）            ...
-                     lookupDict
-                     （local → Bing → youdao）
-                     ◄──result──
+用户操作              Content Script              Background SW           外部 API
+─────────            ──────────────             ──────────────          ────────
+划词翻译    ──msg──►  App.vue                                    ──►  Microsoft /
+弹窗翻译    ──msg──►  Popup.vue ──msg──►  translateWithFallback  ──►  Google /
+右键菜单    ──msg──►  App.vue            (LRU 缓存 + fallback)   ──►  腾讯 / 百度 /
+沉浸式翻译  ──msg──►  controller.ts ──►  batchTranslate (并发)   ──►  DeepL / OpenAI /
+            (popup)  walker.ts                                    ──►  Claude / ...
+                     translator.ts            lookupDict
+                     injector.ts              (local → Bing → youdao)
+                                              ◄──result──
 ```
 
-- **MV3 Service Worker**：所有翻译/词典请求集中处理，绕过目标页面 CSP（在 GitHub / 银行等严格 CSP 站点也能工作）
-- **LRU + TTL 缓存**：500 条 × 30 分钟，custom URL/model 改动会自动失效
+- **MV3 Service Worker**：所有翻译/词典请求集中处理，绕过目标页面 CSP
+- **LRU + TTL 缓存**：500 条 × 30 分钟，custom URL/model 改动自动失效
 - **自动 fallback**：首选源失败时依次尝试免费源
 - **API Key 加密**：AES-GCM，密钥存在 `chrome.storage.local`
-- **请求超时**：30 秒 `AbortSignal.timeout` 兜底
+- **请求超时**：30 秒 AbortSignal.timeout 兜底
 
 ## 项目结构
 
@@ -144,20 +173,21 @@ content script 收到译文 → 注入到 DOM
 src/
 ├── background/main.ts          # Service Worker（消息路由 + 翻译/词典/批量翻译入口）
 ├── contentScripts/
-│   ├── index.ts                # 注入到页面（CSS + 划词翻译容器 + 沉浸式控制器）
+│   ├── index.ts                # 注入到页面（CSS + 划词翻译容器 + 沉浸式控制器加载）
 │   ├── style.css               # 注入样式（qt-* 前缀，不污染主页面）
 │   ├── views/App.vue           # 划词翻译 UI
 │   └── immersive/
-│       ├── controller.ts       # 沉浸式翻译控制器（纯 TS，无 Vue）
-│       ├── walker.ts           # DOM 遍历 + 文本提取（Shadow DOM / iframe）
+│       ├── controller.ts       # 沉浸式翻译控制器（纯 TS，IntersectionObserver + SPA 路由监听）
+│       ├── walker.ts           # DOM 遍历 + 文本提取（Shadow DOM / iframe / 排除选择器）
 │       ├── translator.ts       # 批量翻译调度（并发控制）
-│       └── injector.ts         # 译文注入 DOM（双语 / 仅译文）
+│       └── injector.ts         # 译文注入 DOM（双语 / 仅译文 / 限制性父元素处理）
 ├── popup/
 │   ├── Popup.vue               # 弹窗（划词翻译 tab + 全文翻译 tab）
 │   └── ...
-├── options/                    # 设置页（含沉浸式翻译设置）
+├── options/
+│   └── Options.vue             # 设置页（翻译源 / 沉浸式翻译 / 词典 / 生词本）
 ├── logic/
-│   ├── translate.ts            # 所有翻译函数 + IMPL 表
+│   ├── translate.ts            # 所有翻译函数 + IMPL 表 + LRU 缓存
 │   ├── translators-meta.ts     # 翻译源元数据（id/name/needKey）
 │   ├── lang-utils.ts           # detectLang / getTargetLang（纯函数）
 │   ├── dict.ts                 # 本地/在线词典
@@ -165,7 +195,7 @@ src/
 │   ├── crypto.ts               # AES-GCM 加密
 │   └── md5.ts                  # 百度签名用 MD5
 └── composables/
-    ├── useStorage.ts           # Vue + chrome.storage 同步
+    ├── useStorage.ts           # Vue ref ↔ chrome.storage.local 双向同步
     ├── useEncryptedKeys.ts     # API Keys 加密 ref
     └── useFavorites.ts         # 生词本
 ```
@@ -173,7 +203,7 @@ src/
 ## 技术栈
 
 - Vue 3 + TypeScript
-- Vite 5（lib 模式分别打包 content/background/popup/options）
+- Vite 5（lib 模式分别打包 content / background / popup / options）
 - Chrome Extension Manifest V3
 
 ## 许可
