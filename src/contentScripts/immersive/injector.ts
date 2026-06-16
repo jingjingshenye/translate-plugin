@@ -5,7 +5,7 @@ const BLOCK_ID_ATTR = 'data-qt-block-id'
 const elementMap = new Map<number, Element>()
 const markerMap = new Map<number, Element>()
 
-const RESTRICTIVE_PARENTS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'DT', 'DD', 'SPAN', 'A', 'EM', 'STRONG', 'B', 'I', 'U', 'MARK', 'CODE', 'LABEL', 'FIGCAPTION', 'CAPTION', 'SUMMARY', 'LEGEND', 'BUTTON'])
+const RESTRICTIVE_PARENTS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'DT', 'DD', 'TD', 'TH', 'SPAN', 'A', 'EM', 'STRONG', 'B', 'I', 'U', 'MARK', 'CODE', 'LABEL', 'FIGCAPTION', 'CAPTION', 'SUMMARY', 'LEGEND', 'BUTTON'])
 
 export function injectTranslation(blockId: number, translatedText: string, mode: 'bilingual' | 'translated-only', isCode: boolean): void {
   const existing = markerMap.get(blockId)

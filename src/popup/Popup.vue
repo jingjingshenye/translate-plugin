@@ -112,7 +112,6 @@ const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
 const immersiveError = ref('')
 
 const effectiveImmersiveApi = computed(() => immersiveApi.value || currentApi.value)
-const immersiveApiName = computed(() => getMeta(effectiveImmersiveApi.value).name)
 const immersivePercent = computed(() => {
   if (immersiveProgress.value.total === 0) return 0
   return Math.round(immersiveProgress.value.done / immersiveProgress.value.total * 100)
@@ -125,7 +124,14 @@ function onImmersiveProgress(msg: any) {
   }
 }
 
-onMounted(() => chrome.runtime.onMessage.addListener(onImmersiveProgress))
+onMounted(() => {
+  chrome.runtime.onMessage.addListener(onImmersiveProgress)
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([activeTab]) => {
+    if (activeTab?.id) {
+      chrome.tabs.sendMessage(activeTab.id, { type: 'qt-immersive-status' }).catch(() => {})
+    }
+  })
+})
 onUnmounted(() => chrome.runtime.onMessage.removeListener(onImmersiveProgress))
 
 async function startImmersive() {
