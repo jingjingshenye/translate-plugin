@@ -109,6 +109,7 @@ const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: '
 
 const immersiveState = ref<ImmersiveState>('idle')
 const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
+const immersiveError = ref('')
 
 const effectiveImmersiveApi = computed(() => immersiveApi.value || currentApi.value)
 const immersiveApiName = computed(() => getMeta(effectiveImmersiveApi.value).name)
@@ -134,26 +135,30 @@ async function startImmersive() {
 
   if (!isCustom && meta.needKey && !immersiveKeys.value[api]) {
     immersiveState.value = 'error'
-    immersiveProgress.value = { total: 0, done: 0, failed: 0 } as any
-    ;(immersiveProgress.value as any).error = `${meta.name} 需要配置 API Key`
+    immersiveError.value = `${meta.name} 需要配置 API Key`
     return
   }
 
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!activeTab?.id) return
 
-  chrome.tabs.sendMessage(activeTab.id, {
-    type: 'qt-immersive-translate',
-    payload: {
-      api,
-      apiKey: immersiveKeys.value[api],
-      customConfig: isCustom ? immersiveCustom.value : undefined,
-      mode: immersiveMode.value,
-    },
-  }).catch(() => {})
-
-  immersiveState.value = 'translating'
-  immersiveProgress.value = { total: 0, done: 0, failed: 0 }
+  try {
+    await chrome.tabs.sendMessage(activeTab.id, {
+      type: 'qt-immersive-translate',
+      payload: {
+        api,
+        apiKey: immersiveKeys.value[api],
+        customConfig: isCustom ? immersiveCustom.value : undefined,
+        mode: immersiveMode.value,
+      },
+    })
+    immersiveState.value = 'translating'
+    immersiveProgress.value = { total: 0, done: 0, failed: 0 }
+    immersiveError.value = ''
+  } catch {
+    immersiveState.value = 'error'
+    immersiveError.value = '无法连接到当前页面（chrome:// 等页面不支持扩展）'
+  }
 }
 
 async function cancelImmersive() {
@@ -162,6 +167,7 @@ async function cancelImmersive() {
     chrome.tabs.sendMessage(activeTab.id, { type: 'qt-immersive-cancel' }).catch(() => {})
   }
   immersiveState.value = 'idle'
+  immersiveError.value = ''
 }
 </script>
 
@@ -268,7 +274,7 @@ async function cancelImmersive() {
       </div>
 
       <div v-if="immersiveState === 'error'" class="immersive-err">
-        {{ (immersiveProgress as any).error || '翻译失败' }}
+        {{ immersiveError || '翻译失败' }}
       </div>
 
       <div class="actions">
