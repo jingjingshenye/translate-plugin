@@ -1,8 +1,8 @@
 import { createApp } from 'vue'
 import App from './views/App.vue'
 import styleText from './style.css?inline'
+import './immersive/controller'
 
-// 注入隔离样式到主页面（content script 标准做法）
 const style = document.createElement('style')
 style.textContent = styleText
 document.head.appendChild(style)

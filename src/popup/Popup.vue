@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useStorage } from '~/composables/useStorage'
 import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
 import { invokeTranslate, invokeLookupDict, type DictMode } from '~/logic/background-api'
@@ -7,6 +7,12 @@ import { detectLang, getTargetLang } from '~/logic/lang-utils'
 import { FREE_META, SUBSCRIBE_META, AI_META, getMeta } from '~/logic/translators-meta'
 import { isValidWord, type DictResult } from '~/logic/dict'
 
+type ImmersiveState = 'idle' | 'translating' | 'done' | 'error'
+type ImmersiveMode = 'bilingual' | 'translated-only'
+
+const tab = ref<'word' | 'page'>('word')
+
+// ========== 划词翻译 ==========
 const inputText = ref('')
 const result = ref('')
 const error = ref('')
@@ -46,7 +52,6 @@ async function doTranslate() {
   const word = isValidWord(text)
   isWord.value = word
 
-  // Key 缺失检测
   const meta = getMeta(currentApi.value)
   const isCustom = currentApi.value === 'custom'
   if (!isCustom && meta.needKey && !apiKeys.value[currentApi.value]) {
@@ -95,6 +100,69 @@ async function copyResult() {
 }
 
 function openOptions() { chrome.runtime.openOptionsPage() }
+
+// ========== 全文翻译 ==========
+const immersiveApi = useStorage<string>('qt_immersive_api', '')
+const immersiveMode = useStorage<ImmersiveMode>('qt_immersive_mode', 'bilingual')
+const immersiveKeys = useEncryptedKeys('qt_api_keys')
+const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
+
+const immersiveState = ref<ImmersiveState>('idle')
+const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
+
+const effectiveImmersiveApi = computed(() => immersiveApi.value || currentApi.value)
+const immersiveApiName = computed(() => getMeta(effectiveImmersiveApi.value).name)
+const immersivePercent = computed(() => {
+  if (immersiveProgress.value.total === 0) return 0
+  return Math.round(immersiveProgress.value.done / immersiveProgress.value.total * 100)
+})
+
+function onImmersiveProgress(msg: any) {
+  if (msg.type === 'qt-immersive-progress') {
+    immersiveState.value = msg.payload.state
+    immersiveProgress.value = msg.payload.progress
+  }
+}
+
+onMounted(() => chrome.runtime.onMessage.addListener(onImmersiveProgress))
+onUnmounted(() => chrome.runtime.onMessage.removeListener(onImmersiveProgress))
+
+async function startImmersive() {
+  const api = effectiveImmersiveApi.value
+  const meta = getMeta(api)
+  const isCustom = api === 'custom'
+
+  if (!isCustom && meta.needKey && !immersiveKeys.value[api]) {
+    immersiveState.value = 'error'
+    immersiveProgress.value = { total: 0, done: 0, failed: 0 } as any
+    ;(immersiveProgress.value as any).error = `${meta.name} 需要配置 API Key`
+    return
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (!activeTab?.id) return
+
+  chrome.tabs.sendMessage(activeTab.id, {
+    type: 'qt-immersive-translate',
+    payload: {
+      api,
+      apiKey: immersiveKeys.value[api],
+      customConfig: isCustom ? immersiveCustom.value : undefined,
+      mode: immersiveMode.value,
+    },
+  }).catch(() => {})
+
+  immersiveState.value = 'translating'
+  immersiveProgress.value = { total: 0, done: 0, failed: 0 }
+}
+
+async function cancelImmersive() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (activeTab?.id) {
+    chrome.tabs.sendMessage(activeTab.id, { type: 'qt-immersive-cancel' }).catch(() => {})
+  }
+  immersiveState.value = 'idle'
+}
 </script>
 
 <template>
@@ -105,7 +173,13 @@ function openOptions() { chrome.runtime.openOptionsPage() }
       <button class="settings-btn" @click="openOptions" title="设置">⚙</button>
     </header>
 
-    <div class="body">
+    <nav class="tabs">
+      <button :class="{ active: tab === 'word' }" @click="tab = 'word'">划词翻译</button>
+      <button :class="{ active: tab === 'page' }" @click="tab = 'page'">全文翻译</button>
+    </nav>
+
+    <!-- ==================== 划词翻译 ==================== -->
+    <div v-if="tab === 'word'" class="body">
       <select v-model="currentApi" class="sel api-sel">
         <optgroup label="免费"><option v-for="t in FREE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
         <optgroup label="订阅"><option v-for="t in SUBSCRIBE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
@@ -130,7 +204,7 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 
       <template v-if="isWord && dictResult">
         <div class="section">
-          <div class="section-tag tag-green">📚 本地词典 · ECDICT</div>
+          <div class="section-tag tag-green">本地词典</div>
           <div v-if="dictResult.phonetic || dictResult.audio" class="phonetic">
             <span v-if="dictResult.phonetic?.uk" class="phon">英 [{{ dictResult.phonetic.uk }}]</span>
             <span v-if="dictResult.phonetic?.us" class="phon">美 [{{ dictResult.phonetic.us }}]</span>
@@ -157,7 +231,7 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 
       <div v-if="result" class="result">
         <div class="result-bar">
-          <span class="tag-blue">🌐 {{ getMeta(usedApi).name.toUpperCase() }}<em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
+          <span class="tag-blue">{{ getMeta(usedApi).name }}<em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
           <button class="copy-btn" @click="copyResult">{{ copied ? '✓' : '复制' }}</button>
         </div>
         <div class="result-text">{{ result }}</div>
@@ -168,6 +242,40 @@ function openOptions() { chrome.runtime.openOptionsPage() }
         <button v-if="!error.includes('设置')" class="retry-btn" @click="doTranslate">重试</button>
       </div>
     </div>
+
+    <!-- ==================== 全文翻译 ==================== -->
+    <div v-if="tab === 'page'" class="body">
+      <select v-model="immersiveApi" class="sel api-sel">
+        <option value="">跟随划词设置（{{ getMeta(currentApi).name }}）</option>
+        <optgroup label="免费"><option v-for="t in FREE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="订阅"><option v-for="t in SUBSCRIBE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <optgroup label="AI"><option v-for="t in AI_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+        <option value="custom">自定义 API</option>
+      </select>
+
+      <div class="mode-row">
+        <button :class="['mode-btn', { active: immersiveMode === 'bilingual' }]" @click="immersiveMode = 'bilingual'">双语对照</button>
+        <button :class="['mode-btn', { active: immersiveMode === 'translated-only' }]" @click="immersiveMode = 'translated-only'">仅译文</button>
+      </div>
+
+      <div v-if="immersiveState === 'idle'" class="immersive-hint">
+        点击按钮翻译当前页面，译文将直接显示在页面上。
+      </div>
+
+      <div v-if="immersiveState === 'translating'" class="immersive-progress">
+        <div class="progress-bar"><div class="progress-fill" :style="{ width: immersivePercent + '%' }"></div></div>
+        <div class="progress-text">{{ immersiveProgress.done }} / {{ immersiveProgress.total }}<span v-if="immersiveProgress.failed > 0" class="fail"> · {{ immersiveProgress.failed }}失败</span></div>
+      </div>
+
+      <div v-if="immersiveState === 'error'" class="immersive-err">
+        {{ (immersiveProgress as any).error || '翻译失败' }}
+      </div>
+
+      <div class="actions">
+        <button v-if="immersiveState === 'translating'" class="btn btn-clear" @click="cancelImmersive">取消</button>
+        <button v-else class="btn btn-go" @click="startImmersive">翻译此页面</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -176,9 +284,13 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 
 .header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: linear-gradient(90deg, rgba(56,189,248,0.1), transparent); border-bottom: 1px solid rgba(56,189,248,0.12); }
 .logo { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, #38bdf8, #7dd3fc); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff; }
-.title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #0ea5e9; }
-.settings-btn { margin-left: auto; background: none; border: none; color: #64748b; font-size: 16px; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 2px 4px; border-radius: 4px; }
+.title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #0ea5e9; flex: 1; }
+.settings-btn { background: none; border: none; color: #64748b; font-size: 16px; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 2px 4px; border-radius: 4px; }
 .settings-btn:hover { opacity: 1; background: rgba(56,189,248,0.1); }
+
+.tabs { display: flex; border-bottom: 1px solid rgba(56,189,248,0.12); }
+.tabs button { flex: 1; padding: 8px 0; background: none; border: none; border-bottom: 2px solid transparent; color: #64748b; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.tabs button.active { color: #0ea5e9; border-bottom-color: #0ea5e9; }
 
 .body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
 
@@ -193,7 +305,6 @@ function openOptions() { chrome.runtime.openOptionsPage() }
 .swap { cursor: pointer; font-size: 16px; color: #0ea5e9; opacity: 0.7; user-select: none; transition: opacity 0.15s; }
 .swap:hover { opacity: 1; }
 .swap-disabled { opacity: 0.3; cursor: not-allowed; }
-.swap-disabled:hover { opacity: 0.3; }
 
 textarea { width: 100%; padding: 8px 10px; background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 6px; color: #0c4a6e; font-size: 13px; line-height: 1.5; resize: vertical; font-family: inherit; outline: none; }
 textarea:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.1); }
@@ -224,9 +335,7 @@ textarea::placeholder { color: #64748b; }
 .def-item { font-size: 12px; line-height: 1.5; padding: 1px 0; }
 .pos { color: #0ea5e9; font-weight: 600; margin-right: 4px; }
 .def { color: #334155; }
-
 .presents { font-size: 11px; color: #64748b; margin-bottom: 4px; }
-
 .sentences { margin-top: 4px; }
 .sent { margin-bottom: 4px; }
 .sent-en { font-size: 11px; color: #334155; line-height: 1.4; }
@@ -243,4 +352,20 @@ textarea::placeholder { color: #64748b; }
 .error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .retry-btn { padding: 3px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #dc2626; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
 .retry-btn:hover { background: rgba(239,68,68,0.2); }
+
+/* 全文翻译 */
+.mode-row { display: flex; gap: 6px; }
+.mode-btn { flex: 1; padding: 6px 0; font-size: 11px; border: 1px solid rgba(56,189,248,0.2); background: #fff; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+.mode-btn:hover { border-color: rgba(56,189,248,0.4); color: #0ea5e9; }
+.mode-btn.active { background: rgba(14,165,233,0.1); border-color: #0ea5e9; color: #0ea5e9; font-weight: 600; }
+
+.immersive-hint { font-size: 11px; color: #94a3b8; text-align: center; padding: 4px 0; }
+
+.immersive-progress { display: flex; flex-direction: column; gap: 6px; }
+.progress-bar { width: 100%; height: 5px; background: rgba(56,189,248,0.12); border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #0ea5e9, #38bdf8); border-radius: 3px; transition: width 0.3s ease; }
+.progress-text { font-size: 11px; color: #64748b; text-align: center; }
+.fail { color: #ef4444; }
+
+.immersive-err { font-size: 11px; color: #dc2626; text-align: center; padding: 4px 0; }
 </style>

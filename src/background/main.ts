@@ -1,5 +1,5 @@
 import { translateWithFallback, type TranslateResult } from '~/logic/translate'
-import { localDict, bingDict, lookupDict, onlineLookup, type DictResult } from '~/logic/dict'
+import { localDict, lookupDict, onlineLookup, type DictResult } from '~/logic/dict'
 
 chrome.runtime.onInstalled.addListener(() => createContextMenus())
 chrome.runtime.onStartup.addListener(() => createContextMenus())
@@ -50,6 +50,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         console.warn('[QT] dict failed:', err?.message || err)
         sendResponse({ result: null })
       })
+    return true
+  }
+  if (msg.type === 'qt-batch-translate') {
+    const { texts, from, to, api, apiKey, customConfig } = msg.payload
+    const promises = texts.map((text: string) =>
+      translateWithFallback(text, from, to, undefined, api, apiKey, customConfig)
+        .then((result: TranslateResult) => result)
+        .catch(() => null),
+    )
+    Promise.all(promises)
+      .then((results) => sendResponse({ results }))
+      .catch(() => sendResponse({ results: texts.map(() => null) }))
     return true
   }
   if (msg.type === 'qt-cancel') {

@@ -11,6 +11,8 @@ const toLang = useStorage<string>('qt_to', 'zh')
 const apiKeys = useEncryptedKeys('qt_api_keys')
 const apiModels = useStorage<Record<string, string>>('qt_api_models', {})
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
+const immersiveApi = useStorage<string>('qt_immersive_api', '')
+const immersiveMode = useStorage<'bilingual' | 'translated-only'>('qt_immersive_mode', 'bilingual')
 
 const customApi = useStorage('qt_custom_api', {
   url: '',
@@ -21,7 +23,7 @@ const customApi = useStorage('qt_custom_api', {
 
 const { list: favList, count: favCount, toggle: toggleFav, setTranslation: setFavTranslation, clear: clearFavs, exportList, importList } = useFavorites()
 
-const tab = ref<'api' | 'dict' | 'fav'>('api')
+const tab = ref<'api' | 'immersive' | 'dict' | 'fav'>('api')
 const editingApi = ref<string>('')
 
 function setApiKey(id: string, key: string) {
@@ -93,6 +95,7 @@ function download(content: string, name: string, type: string) {
 
     <nav class="tabs">
       <button :class="{ active: tab === 'api' }" @click="tab = 'api'">翻译源</button>
+      <button :class="{ active: tab === 'immersive' }" @click="tab = 'immersive'">沉浸式翻译</button>
       <button :class="{ active: tab === 'dict' }" @click="tab = 'dict'">词典</button>
       <button :class="{ active: tab === 'fav' }" @click="tab = 'fav'">生词本 <em v-if="stats.total">({{ stats.total }})</em></button>
     </nav>
@@ -169,6 +172,53 @@ function download(content: string, name: string, type: string) {
           <div class="row">
             <label>Prompt</label>
             <input v-model="customApi.prompt" type="text" placeholder="自定义系统提示词（可选）" />
+          </div>
+        </section>
+      </template>
+
+      <!-- ==================== 沉浸式翻译 ==================== -->
+      <template v-if="tab === 'immersive'">
+        <section class="card">
+          <h2>沉浸式翻译设置</h2>
+          <p class="hint" style="margin-bottom:14px">整页翻译，支持双语对照。在任意网页点击右下角浮动按钮即可翻译。</p>
+          <div class="row">
+            <label>翻译引擎</label>
+            <select v-model="immersiveApi">
+              <option value="">跟随默认设置（{{ FREE_META.find(t => t.id === api)?.name || 'Microsoft' }}）</option>
+              <optgroup label="免费"><option v-for="t in FREE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="订阅源（需Key）"><option v-for="t in SUBSCRIBE_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <optgroup label="AI（需Key）"><option v-for="t in AI_META" :key="t.id" :value="t.id">{{ t.name }}</option></optgroup>
+              <option value="custom">自定义 API</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>翻译模式</label>
+            <select v-model="immersiveMode">
+              <option value="bilingual">双语对照（原文+译文）</option>
+              <option value="translated-only">仅显示译文</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>使用说明</h2>
+          <div class="source-list">
+            <div class="source-item">
+              <span class="source-badge local">1</span>
+              <span class="source-detail">打开任意英文网页，点击右下角浮动按钮</span>
+            </div>
+            <div class="source-item">
+              <span class="source-badge local">2</span>
+              <span class="source-detail">选择翻译模式（双语对照 / 仅译文），点击"翻译此页面"</span>
+            </div>
+            <div class="source-item">
+              <span class="source-badge local">3</span>
+              <span class="source-detail">翻译完成后可随时切换模式、显示/隐藏原文、清除译文</span>
+            </div>
+            <div class="source-item">
+              <span class="source-badge online">推荐</span>
+              <span class="source-detail">整页翻译建议使用免费引擎（Google/微软），速度快且无成本</span>
+            </div>
           </div>
         </section>
       </template>
@@ -296,7 +346,7 @@ function download(content: string, name: string, type: string) {
     </main>
 
     <footer class="footer">
-      <p>Quick Translate v1.0.0 · {{ ALL_META.length }}种翻译源 · API Key AES-GCM 加密</p>
+      <p>Quick Translate v1.1.0 · {{ ALL_META.length }}种翻译源 · API Key AES-GCM 加密</p>
     </footer>
   </div>
 </template>

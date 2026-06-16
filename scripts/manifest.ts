@@ -10,8 +10,8 @@ async function main() {
   const manifest = {
     manifest_version: 3,
     name: 'Quick Translate',
-    version: '1.0.0',
-    description: '划词翻译 + 弹窗翻译浏览器插件',
+    version: '1.1.0',
+    description: '划词翻译 + 弹窗翻译 + 沉浸式翻译浏览器插件',
     action: {
       default_icon: 'icons/icon128.png',
       default_popup: 'dist/popup/index.html',

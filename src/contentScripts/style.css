@@ -54,3 +54,49 @@
 .qt-lang-go{width:100%;padding:4px 0;font-size:11px;border:none;border-radius:4px;background:linear-gradient(135deg,#0ea5e9,#38bdf8);color:#fff;cursor:pointer;font-weight:600}
 .qt-fav-btn{padding:2px 6px;font-size:14px;border:1px solid rgba(56,189,248,.25);background:transparent;color:#ef4444;border-radius:3px;cursor:pointer;transition:all .15s;line-height:1}
 .qt-fav-btn:hover{background:rgba(239,68,68,.1)}
+
+/* ============ Immersive Translation ============ */
+.qt-immersive-ctrl{position:fixed;bottom:16px;right:16px;z-index:2147483646;width:220px;padding:10px 12px;background:#f0f9ff;border:1px solid rgba(56,189,248,.25);border-radius:10px;font:11px/1.4 system-ui,sans-serif;color:#0c4a6e;box-shadow:0 2px 16px rgba(14,165,233,.12),0 4px 20px rgba(0,0,0,.06)}
+.qt-immersive-ctrl *{box-sizing:border-box;margin:0;padding:0}
+.qt-ctrl-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.qt-ctrl-title{font-size:10px;font-weight:700;color:#0ea5e9;letter-spacing:.5px}
+.qt-ctrl-api{font-size:9px;color:#0ea5e9;background:rgba(14,165,233,.08);padding:1px 6px;border-radius:3px}
+.qt-ctrl-pct{font-size:10px;font-weight:700;color:#0ea5e9}
+.qt-ctrl-bar{width:100%;height:4px;background:rgba(56,189,248,.12);border-radius:2px;overflow:hidden;margin-bottom:6px}
+.qt-ctrl-fill{height:100%;background:linear-gradient(90deg,#0ea5e9,#38bdf8);border-radius:2px;transition:width .3s}
+.qt-ctrl-info{font-size:10px;color:#64748b;margin-bottom:6px}
+.qt-ctrl-fail{color:#ef4444}
+.qt-ctrl-err{font-size:10px;color:#dc2626;margin-bottom:6px}
+.qt-ctrl-btns{display:flex;gap:4px;flex-wrap:wrap}
+.qt-ctrl-btn{padding:3px 0;font-size:10px;border:1px solid rgba(56,189,248,.2);background:#fff;color:#64748b;border-radius:4px;cursor:pointer;transition:all .15s;flex:1;text-align:center}
+.qt-ctrl-btn:hover{border-color:#0ea5e9;color:#0ea5e9}
+.qt-ctrl-btn.active{background:rgba(14,165,233,.1);border-color:#0ea5e9;color:#0ea5e9;font-weight:600}
+.qt-ctrl-cancel{background:rgba(239,68,68,.05);border-color:rgba(239,68,68,.25);color:#ef4444}
+.qt-ctrl-clear{border-color:rgba(239,68,68,.25);color:#ef4444}
+.qt-ctrl-clear:hover{border-color:#ef4444}
+
+/* Translated text injection styles */
+.qt-immersive-hidden{display:none !important}
+.qt-immersive-trans{
+  display:block;
+  margin-top:4px;
+  padding:4px 8px;
+  border-left:3px solid #38bdf8;
+  background:rgba(56,189,248,.04);
+  color:#0c4a6e;
+  font-size:inherit;
+  line-height:inherit;
+  font-family:inherit;
+  border-radius:0 4px 4px 0;
+  opacity:.92;
+}
+.qt-immersive-trans-code{
+  display:inline;
+  margin:0;
+  padding:1px 4px;
+  border-left:none;
+  background:rgba(14,165,233,.08);
+  border-radius:3px;
+  font-size:.9em;
+  color:#0ea5e9;
+}

@@ -1,12 +1,13 @@
 # Quick Translate
 
-划词翻译 + 弹窗翻译 Chrome 浏览器插件。
+划词翻译 + 弹窗翻译 + 沉浸式翻译 Chrome 浏览器插件。
 
 ## 功能
 
 - **划词翻译** — 选中文字出现翻译图标，点击或悬停查看翻译和词典释义
 - **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字触发翻译
 - **弹窗翻译** — 点击插件图标，输入文本翻译
+- **沉浸式翻译** — 整页翻译，支持双语对照 / 仅译文模式
 - **20+ 翻译源**
   - 免费：Microsoft / Google / 腾讯 / 火山 / 百度 / DeepL Free
   - 订阅：腾讯云 / 百度翻译 API / Google API / DeepL API
@@ -59,6 +60,64 @@ npm run build
   - **网络** — Bing/有道，含音标、发音、例句、双解
   - **混合** — 本地优先（瞬间），异步补充网络数据
 
+## 沉浸式翻译
+
+整页翻译功能，在插件弹窗的「全文翻译」tab 中触发，译文直接显示在页面上。
+
+### 使用方式
+
+1. 打开任意英文网页，点击插件图标打开弹窗
+2. 切换到「全文翻译」tab，选择翻译模式
+3. 点击「翻译此页面」，页面右下角出现小型控制面板
+4. 翻译完成后可切换模式、显示/隐藏原文、清除译文
+
+### 翻译模式
+
+| 模式 | 说明 |
+|------|------|
+| 双语对照 | 原文下方显示译文，蓝色竖线标记 |
+| 仅译文 | 隐藏原文，只显示中文译文 |
+
+### 翻译引擎
+
+可在设置中为沉浸式翻译单独选择引擎，或跟随默认设置。整页翻译建议使用免费引擎（Google / Microsoft），速度快且无成本。
+
+### 代码块处理
+
+代码块按语言标记智能区分：
+
+| 类型 | 处理 |
+|------|------|
+| 有编程语言标记（`language-python`、`lang-js` 等） | 跳过，不翻译 |
+| 纯文本标记（`language-text`、`language-plain`、`language-markdown` 等） | 翻译 |
+| 无语言标记的 `<code>` / `<pre>` | 翻译 |
+| 纯符号内容（`{}`、`;`、`++` 等） | 跳过 |
+
+兼容主流语法高亮库（Prism / Highlight.js / Shiki / GitHub），通过以下方式检测语言：
+- CSS class：`language-*`、`lang-*`、`highlight-source-*`、`hljs`
+- HTML 属性：`data-lang`、`data-language`
+
+### Shadow DOM / iframe
+
+- **Shadow DOM**：自动遍历 Shadow Root 内的文本节点并翻译，译文通过 Map 引用管理（不依赖 document.querySelector）
+- **iframe**：支持同源 iframe 内容翻译（跨域 iframe 因浏览器安全限制无法访问）
+
+### 技术实现
+
+```
+页面加载
+  ↓
+TreeWalker 遍历文本节点（含 Shadow DOM 递归）
+  ↓
+按块级元素聚合 + 去重 + 语言检测过滤
+  ↓
+批量发送到 background（并发 3 路，每批 5 条）
+  ↓
+background 调用翻译 API（复用已有引擎 + fallback）
+  ↓
+content script 收到译文 → 注入到 DOM
+```
+
 ## 架构
 
 ```
@@ -67,6 +126,7 @@ npm run build
 划词翻译    ──msg──►  translateWithFallback    ──►     Microsoft / Google /
 弹窗翻译    ──msg──►  （LRU 缓存 + 30s 超时 +           腾讯 / 百度 / DeepL /
 右键菜单    ──msg──►  fallback）                        OpenAI / Claude / ...
+沉浸式翻译  ──msg──►  batchTranslate（并发）            ...
                      lookupDict
                      （local → Bing → youdao）
                      ◄──result──
@@ -82,13 +142,20 @@ npm run build
 
 ```
 src/
-├── background/main.ts          # Service Worker（消息路由 + 翻译/词典入口）
+├── background/main.ts          # Service Worker（消息路由 + 翻译/词典/批量翻译入口）
 ├── contentScripts/
-│   ├── index.ts                # 注入到页面（CSS + 容器）
+│   ├── index.ts                # 注入到页面（CSS + 划词翻译容器 + 沉浸式控制器）
 │   ├── style.css               # 注入样式（qt-* 前缀，不污染主页面）
-│   └── views/App.vue           # 划词翻译 UI
-├── popup/                      # 弹窗翻译
-├── options/                    # 设置页
+│   ├── views/App.vue           # 划词翻译 UI
+│   └── immersive/
+│       ├── controller.ts       # 沉浸式翻译控制器（纯 TS，无 Vue）
+│       ├── walker.ts           # DOM 遍历 + 文本提取（Shadow DOM / iframe）
+│       ├── translator.ts       # 批量翻译调度（并发控制）
+│       └── injector.ts         # 译文注入 DOM（双语 / 仅译文）
+├── popup/
+│   ├── Popup.vue               # 弹窗（划词翻译 tab + 全文翻译 tab）
+│   └── ...
+├── options/                    # 设置页（含沉浸式翻译设置）
 ├── logic/
 │   ├── translate.ts            # 所有翻译函数 + IMPL 表
 │   ├── translators-meta.ts     # 翻译源元数据（id/name/needKey）
