@@ -25,6 +25,33 @@ let apiConfig: { api: string; apiKey?: string; customConfig?: any } = { api: 'mi
 const PANEL_ID = 'qt-immersive-status-panel'
 const BATCH_SIZE = 5
 
+let lastUrl = location.href
+
+function startRouteWatcher() {
+  const check = () => {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href
+      if (state !== 'idle') cleanup()
+    }
+  }
+
+  window.addEventListener('popstate', check)
+
+  const origPush = history.pushState
+  history.pushState = function (...args) {
+    origPush.apply(this, args)
+    check()
+  }
+
+  const origReplace = history.replaceState
+  history.replaceState = function (...args) {
+    origReplace.apply(this, args)
+    check()
+  }
+}
+
+startRouteWatcher()
+
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }

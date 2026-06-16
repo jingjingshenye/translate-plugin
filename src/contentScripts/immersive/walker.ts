@@ -185,10 +185,6 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
 
     if (isExcluded(block.el)) return
 
-    const key = block.isCode ? `code:${trimmed.toLowerCase()}` : trimmed.toLowerCase()
-    if (seen.has(key)) return
-    seen.add(key)
-
     let arr = groups.get(block.el)
     if (!arr) {
       arr = []
@@ -200,6 +196,9 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
   for (const [element, items] of groups) {
     const combined = items.map(i => i.text).join(' ')
     if (combined.length < 2) continue
+    const key = items[0].isCode ? `code:${combined.toLowerCase()}` : combined.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
     element.setAttribute(OBSERVE_ATTR, '')
     blocks.push({
       id: blockId++,
@@ -227,10 +226,6 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
 
           if (isExcluded(block.el)) return
 
-          const key = block.isCode ? `code:${trimmed.toLowerCase()}` : trimmed.toLowerCase()
-          if (seen.has(key)) return
-          seen.add(key)
-
           let arr = iframeGroups.get(block.el)
           if (!arr) {
             arr = []
@@ -242,6 +237,9 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
         for (const [element, items] of iframeGroups) {
           const combined = items.map(i => i.text).join(' ')
           if (combined.length < 2) continue
+          const key = items[0].isCode ? `code:${combined.toLowerCase()}` : combined.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
           element.setAttribute(OBSERVE_ATTR, '')
           blocks.push({
             id: blockId++,
