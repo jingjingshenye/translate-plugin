@@ -27,6 +27,7 @@ const translatedText = ref('')
 const detectedSrc = ref('')
 const currentApi = useStorage<string>('qt_api', 'microsoft')
 const apiKeys = useEncryptedKeys('qt_api_keys')
+const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
 const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const isWord = ref(false)
@@ -119,6 +120,7 @@ function onMouseUp(event: MouseEvent) {
   setTimeout(() => {
     const hit = getInputSelection(inputElement) || getComposedSelection()
     if (!hit) return
+    if (skipLangs.value.includes(detectLang(hit.text))) return
 
     selectionRect = hit.rect
     sourceText.value = hit.text

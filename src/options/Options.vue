@@ -14,6 +14,16 @@ const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<'bilingual' | 'translated-only'>('qt_immersive_mode', 'bilingual')
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
+const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
+
+const skipLangOptions = [
+  { id: 'zh', label: '中文' },
+  { id: 'en', label: 'English' },
+  { id: 'ja', label: '日本語' },
+  { id: 'ko', label: '한국어' },
+  { id: 'ru', label: 'Русский' },
+  { id: 'ar', label: 'العربية' },
+]
 
 const customApi = useStorage('qt_custom_api', {
   url: '',
@@ -122,6 +132,17 @@ function download(content: string, name: string, type: string) {
           <div class="row">
             <label>目标语言</label>
             <select v-model="toLang"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>划词行为</h2>
+          <p class="hint" style="margin-bottom:12px">选中以下语言的文本时，不显示翻译图标（可多选）</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px 16px;">
+            <label v-for="l in skipLangOptions" :key="l.id" style="display:flex;align-items:center;gap:5px;font-size:13px;color:#0c4a6e;cursor:pointer;">
+              <input type="checkbox" :value="l.id" v-model="skipLangs" style="accent-color:#0ea5e9;" />
+              {{ l.label }}
+            </label>
           </div>
         </section>
 
