@@ -33,3 +33,6 @@ ecdict.mini.csv
 *.njsproj
 *.sln
 *.sw?
+
+*.zip
+*.tar.gz
