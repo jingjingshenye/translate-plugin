@@ -4,26 +4,29 @@
 
 ## 功能
 
-- **划词翻译** — 选中文字出现翻译图标，点击查看翻译和词典释义
-- **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字
+- **划词翻译** — 选中文字出现翻译图标，点击查看翻译和词典释义；译文可朗读（内置 TTS）
+- **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字（密码框自动跳过）
 - **弹窗翻译** — 点击插件图标，输入文本翻译
-- **沉浸式翻译** — 整页翻译，支持双语对照 / 仅译文，可视区域懒加载
+- **沉浸式翻译** — 整页翻译，双语对照 / 仅译文，可视区域懒加载，独立目标语言，页面语言即目标语言时自动跳过
+- **AI 对照翻译** — 划词时并行请求已配置 Key 的 AI 源，独立显示一份对照译文（自动选源/指定/关闭）
 - **20+ 翻译源**
-  - 免费：Microsoft / Google / 腾讯 / 火山 / 百度 / DeepL Free
-  - 订阅：腾讯云 / 百度翻译 API / Google API / DeepL API
-  - AI：DeepSeek / OpenAI / Gemini / Claude / SiliconFlow / 小米MiMo / 阿里百炼 / Cerebras / 智谱AI / OpenRouter
+  - 免费：Microsoft（Edge 免认证端点）/ 腾讯 / 火山 / 百度 / DeepL Free / Google
+  - 订阅：微软 Azure / 腾讯云 / 百度翻译 API / Google API / DeepL API（多家有每月免费额度）
+  - AI：DeepSeek / OpenAI / Gemini / Claude / SiliconFlow / 小米MiMo / 阿里百炼 / Cerebras / 智谱AI / OpenRouter（设置页标注各家免费额度与注册直达）
+- **自动备用（Fallback）** — 主引擎失败自动切换其他免费源，结果标注「备用」；可按源禁用；熔断与最近成功优先
+- **连通性测试** — 设置页逐源一键测试（含免费源），显示具体成功/失败原因
 - **自定义 API** — 任何 OpenAI 兼容接口（URL + Key + Model + Prompt）
-- **AI 模型可配置** — 每个 AI 翻译源可在设置中覆盖默认 model 名
 - **本地词典** — ECDICT 15000 高频词 + 18789 词形映射，瞬间响应
 - **在线词典** — Bing / 有道词典补充音标、例句、双解
-- **生词本** — 收藏、编辑翻译、TXT/CSV/JSON 导出导入
+- **生词本 + 翻译历史** — 收藏（哪个成功收藏哪个）、历史记录（去重上限 100 条）、导出
+- **暗色模式** — 全部界面跟随系统深浅色
 - **API Key 加密** — 所有 Key 用 AES-GCM 加密存储在本地
 
 ## 安装
 
 ### 从 Release 下载
 
-1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.1.0.zip`
+1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.2.0.zip`
 2. 解压
 3. Chrome 打开 `chrome://extensions/`
 4. 开启「开发者模式」→「加载已解压的扩展程序」→ 选择 `extension` 文件夹
@@ -41,12 +44,14 @@ npm run build
 
 ## 翻译源
 
-| 类型 | 引擎 | 需要 Key |
-|------|------|---------|
-| 免费 | Microsoft、Google、腾讯、火山、百度、DeepL Free | 否 |
-| 订阅 | 腾讯云、百度翻译 API、Google API、DeepL API | 是 |
-| AI | DeepSeek、OpenAI、Gemini、Claude、SiliconFlow、小米MiMo、阿里百炼、Cerebras、智谱AI、OpenRouter | 是 |
-| 自定义 | 任何 OpenAI 兼容接口 | 可选 |
+| 类型 | 引擎 | 需要 Key | 免费额度 |
+|------|------|---------|---------|
+| 免费 | Microsoft、腾讯、火山、百度、DeepL Free、Google | 否 | — |
+| 订阅 | 微软 Azure、腾讯云、百度翻译 API、Google API、DeepL API | 是 | Azure 200万字符/月；腾讯云 500万字符/月；百度 5万字符/月；DeepL 50万字符/月 |
+| AI | DeepSeek、OpenAI、Gemini、Claude、SiliconFlow、小米MiMo、阿里百炼、Cerebras、智谱AI、OpenRouter | 是 | 智谱 glm-4-flash 完全免费；SiliconFlow 注册送额度；百炼/Cerebras/Gemini/MiMo 有免费层（详见设置页） |
+| 自定义 | 任何 OpenAI 兼容接口 | 可选 | — |
+
+> Microsoft 免费源走 Edge 浏览器免认证端点，源语言支持英文（其余语言自动备用到其他免费源）。
 
 每个 AI 翻译源可在 Options 中覆盖默认 model（例如把 Claude 切到 `claude-haiku-4-5-20251001` 之外的版本）。
 

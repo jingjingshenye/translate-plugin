@@ -1,9 +1,11 @@
 import { resolve, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const rootDir = resolve(__dirname, 'src')
+const version = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')).version
 
 export default defineConfig({
   root: rootDir,
@@ -13,6 +15,7 @@ export default defineConfig({
   define: {
     __DEV__: 'false',
     __NAME__: '"quick-translate"',
+    __VERSION__: JSON.stringify(version),
     'process.env.NODE_ENV': '"production"',
   },
   build: {

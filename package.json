@@ -1,12 +1,15 @@
 {
   "name": "quick-translate",
   "displayName": "Quick Translate",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "划词翻译 + 弹窗翻译浏览器插件",
   "type": "module",
   "scripts": {
     "build": "npm run clear && npm run build:content && npm run build:background && npm run build:popup && npm run manifest",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "release": "node scripts/release.mjs",
     "build:popup": "vite build --config vite.config.mts",
     "build:content": "vite build --config vite.config.content.mts",
     "build:background": "vite build --config vite.config.background.mts",
@@ -16,15 +19,20 @@
     "dict": "node scripts/build-dict.mjs"
   },
   "dependencies": {
-    "petite-vue": "^0.4.1",
     "vue": "^3.4.38"
   },
   "devDependencies": {
+    "@types/chrome": "^0.2.8",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^26.4.1",
     "@vitejs/plugin-vue": "^5.1.2",
+    "archiver": "^7.0.1",
     "esno": "^4.7.0",
     "fs-extra": "^11.2.0",
     "rimraf": "^6.0.1",
-    "unocss": "^0.62.2",
-    "vite": "^5.4.2"
+    "typescript": "~5.5.4",
+    "vite": "^5.4.2",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.11"
   }
 }

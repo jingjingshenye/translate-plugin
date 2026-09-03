@@ -5,12 +5,13 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const r = (...args: string[]) => resolve(__dirname, '..', ...args)
 const isDev = process.env.NODE_ENV !== 'production'
+const version = JSON.parse(fs.readFileSync(r('package.json'), 'utf-8')).version
 
 async function main() {
   const manifest = {
     manifest_version: 3,
     name: 'Quick Translate',
-    version: '1.1.0',
+    version,
     description: '划词翻译 + 弹窗翻译 + 沉浸式翻译浏览器插件',
     action: {
       default_icon: 'icons/icon128.png',
@@ -29,19 +30,13 @@ async function main() {
       48: 'icons/icon48.png',
       128: 'icons/icon128.png',
     },
-    permissions: ['storage', 'activeTab', 'contextMenus'],
+    permissions: ['storage', 'contextMenus'],
     host_permissions: ['<all_urls>'],
     content_scripts: [
       {
         matches: ['<all_urls>'],
         js: ['dist/contentScripts/index.global.js'],
         run_at: 'document_end',
-      },
-    ],
-    web_accessible_resources: [
-      {
-        resources: ['dict/dict.json'],
-        matches: ['<all_urls>'],
       },
     ],
     content_security_policy: {
