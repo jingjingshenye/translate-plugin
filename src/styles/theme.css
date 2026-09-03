@@ -3,13 +3,31 @@
   --qt-primary-dark: #0ea5e9;
   --qt-primary-light: #7dd3fc;
   --qt-primary-glow: rgba(56, 189, 248, 0.5);
-  --qt-bg: #e0f2fe;
-  --qt-bg-card: #f0f9ff;
-  --qt-bg-input: #fff;
+
+  /* 表面与文字：popup/options 统一引用，暗色模式自动切换 */
+  --qt-bg: #f0f9ff;
+  --qt-card: #ffffff;
+  --qt-input: #f8fbff;
+  --qt-bar: rgba(56, 189, 248, 0.06);
   --qt-text: #0c4a6e;
   --qt-text-light: #64748b;
+  --qt-text-dim: #94a3b8;
   --qt-border: rgba(56, 189, 248, 0.25);
-  --qt-border-light: rgba(56, 189, 248, 0.12);
+  --qt-border-light: rgba(56, 189, 248, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --qt-bg: #0a1622;
+    --qt-card: #11223a;
+    --qt-input: #0d1b2e;
+    --qt-bar: rgba(56, 189, 248, 0.09);
+    --qt-text: #cfe8ff;
+    --qt-text-light: #8fb0cc;
+    --qt-text-dim: #64809c;
+    --qt-border: rgba(56, 189, 248, 0.32);
+    --qt-border-light: rgba(56, 189, 248, 0.16);
+  }
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

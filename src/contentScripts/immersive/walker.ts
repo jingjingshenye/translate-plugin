@@ -70,7 +70,10 @@ function isCodeBlockLanguage(el: Element): 'programming' | 'plain' | 'none' {
   return 'programming'
 }
 
-let blockCache = new WeakMap<Node, { el: Element; isCode: boolean } | null>()
+// 缓存按 Element 粒度：同一元素的多个文本节点共享一次 getComputedStyle/rect 计算
+let ancestorCache = new WeakMap<Element, { el: Element; isCode: boolean } | null>()
+let visibleCache = new WeakMap<Element, boolean>()
+let foundShadowRoots: ShadowRoot[] = []
 let excludeSelectors: string[] = []
 
 function isExcluded(el: Element): boolean {
@@ -80,32 +83,46 @@ function isExcluded(el: Element): boolean {
   return false
 }
 
-function closestBlockAncestor(node: Node): { el: Element; isCode: boolean } | null {
-  const cached = blockCache.get(node)
+function findBlockAncestor(el: Element): { el: Element; isCode: boolean } | null {
+  const cached = ancestorCache.get(el)
   if (cached !== undefined) return cached
 
-  let el: Node | null = node.parentElement
-  while (el && el instanceof Element) {
-    const tag = el.tagName
-    if (tag === 'PRE' || tag === 'CODE') { blockCache.set(node, { el, isCode: true }); return { el, isCode: true } }
-    if (BLOCK_TAGS.has(tag)) { blockCache.set(node, { el, isCode: false }); return { el, isCode: false } }
-    if (tag === 'A' || tag === 'SPAN') {
-      const display = getComputedStyle(el).display
-      if (display === 'block' || display === 'flex' || display === 'grid') { blockCache.set(node, { el, isCode: false }); return { el, isCode: false } }
-    }
-    el = el.parentNode
+  let result: { el: Element; isCode: boolean } | null = null
+  const tag = el.tagName
+  if (tag === 'PRE' || tag === 'CODE') result = { el, isCode: true }
+  else if (BLOCK_TAGS.has(tag)) result = { el, isCode: false }
+  else if (tag === 'A' || tag === 'SPAN') {
+    const display = getComputedStyle(el).display
+    if (display === 'block' || display === 'flex' || display === 'grid') result = { el, isCode: false }
   }
-  blockCache.set(node, null)
-  return null
+  if (!result) result = el.parentElement ? findBlockAncestor(el.parentElement) : null
+  ancestorCache.set(el, result)
+  return result
+}
+
+function closestBlockAncestor(node: Node): { el: Element; isCode: boolean } | null {
+  const parent = node.parentElement
+  return parent ? findBlockAncestor(parent) : null
 }
 
 function isVisible(el: Element): boolean {
-  if (el.closest('[data-qt-immersive]')) return false
-  if (el.closest('[data-qt]')) return false
-  const style = getComputedStyle(el)
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
-  const rect = el.getBoundingClientRect()
-  return rect.width > 0 || rect.height > 0
+  const cached = visibleCache.get(el)
+  if (cached !== undefined) return cached
+
+  let visible = true
+  if (el.closest('[data-qt-immersive]') || el.closest('[data-qt]')) {
+    visible = false
+  } else {
+    const style = getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      visible = false
+    } else {
+      const rect = el.getBoundingClientRect()
+      visible = rect.width > 0 || rect.height > 0
+    }
+  }
+  visibleCache.set(el, visible)
+  return visible
 }
 
 function shouldSkip(el: Element): boolean {
@@ -163,20 +180,17 @@ function walkTextNodes(root: Node, onNode: (node: Text) => void) {
   for (let i = 0; i < allElements.length; i++) {
     const child = allElements[i]
     if (child.shadowRoot) {
+      foundShadowRoots.push(child.shadowRoot)
       walkTextNodes(child.shadowRoot, onNode)
     }
   }
 }
 
-export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBlock[] {
-  blockCache = new WeakMap()
-  excludeSelectors = [...BUILTIN_EXCLUDES, ...userExcludeSelectors]
+interface GroupItem { text: string; node: Text; isCode: boolean }
 
-  const blocks: TextBlock[] = []
-  const seen = new Set<string>()
-  const groups = new Map<Element, { text: string; node: Text; isCode: boolean }[]>()
-
-  walkTextNodes(document.body, (node) => {
+function collectGroups(root: Node): Map<Element, GroupItem[]> {
+  const groups = new Map<Element, GroupItem[]>()
+  walkTextNodes(root, (node) => {
     const trimmed = node.textContent!.trim()
     if (!trimmed) return
 
@@ -192,7 +206,10 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
     }
     arr.push({ text: trimmed, node, isCode: block.isCode })
   })
+  return groups
+}
 
+function pushBlocks(groups: Map<Element, GroupItem[]>, seen: Set<string>, blocks: TextBlock[]) {
   for (const [element, items] of groups) {
     const combined = items.map(i => i.text).join(' ')
     if (combined.length < 2) continue
@@ -208,56 +225,42 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
       isCode: items[0].isCode,
     })
   }
+}
 
-  try {
-    const iframes = document.querySelectorAll('iframe')
-    for (let fi = 0; fi < iframes.length; fi++) {
+export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBlock[] {
+  ancestorCache = new WeakMap()
+  visibleCache = new WeakMap()
+  foundShadowRoots = []
+  excludeSelectors = [...BUILTIN_EXCLUDES, ...userExcludeSelectors]
+
+  const blocks: TextBlock[] = []
+  const seen = new Set<string>()
+
+  pushBlocks(collectGroups(document.body), seen, blocks)
+
+  // iframe：主文档 + shadow DOM 内的；跨域 iframe 的 contentDocument 会抛异常，逐个 try
+  const roots: ParentNode[] = [document.body, ...foundShadowRoots]
+  for (const root of roots) {
+    for (const iframe of root.querySelectorAll('iframe')) {
       try {
-        const doc = iframes[fi].contentDocument
-        if (!doc?.body) continue
-        const iframeGroups = new Map<Element, { text: string; node: Text; isCode: boolean }[]>()
-
-        walkTextNodes(doc.body, (node) => {
-          const trimmed = node.textContent!.trim()
-          if (!trimmed) return
-
-          const block = closestBlockAncestor(node)
-          if (!block) return
-
-          if (isExcluded(block.el)) return
-
-          let arr = iframeGroups.get(block.el)
-          if (!arr) {
-            arr = []
-            iframeGroups.set(block.el, arr)
-          }
-          arr.push({ text: trimmed, node, isCode: block.isCode })
-        })
-
-        for (const [element, items] of iframeGroups) {
-          const combined = items.map(i => i.text).join(' ')
-          if (combined.length < 2) continue
-          const key = items[0].isCode ? `code:${combined.toLowerCase()}` : combined.toLowerCase()
-          if (seen.has(key)) continue
-          seen.add(key)
-          element.setAttribute(OBSERVE_ATTR, '')
-          blocks.push({
-            id: blockId++,
-            text: combined,
-            element,
-            node: items[0].node,
-            isCode: items[0].isCode,
-          })
-        }
+        const doc = iframe.contentDocument
+        if (doc?.body) pushBlocks(collectGroups(doc.body), seen, blocks)
       } catch {}
     }
-  } catch {}
+  }
 
   return blocks
 }
 
 export function unmarkAllObserved() {
   document.querySelectorAll(`[${OBSERVE_ATTR}]`).forEach(el => el.removeAttribute(OBSERVE_ATTR))
+  // document.querySelectorAll 不会进入 shadow DOM 和 iframe，需单独清理
+  for (const root of foundShadowRoots) {
+    root.querySelectorAll(`[${OBSERVE_ATTR}]`).forEach(el => el.removeAttribute(OBSERVE_ATTR))
+  }
+  for (const iframe of document.querySelectorAll('iframe')) {
+    try { iframe.contentDocument?.querySelectorAll(`[${OBSERVE_ATTR}]`).forEach(el => el.removeAttribute(OBSERVE_ATTR)) } catch {}
+  }
 }
 
 export function resetBlockId() {

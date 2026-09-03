@@ -1,56 +1,46 @@
 import { collectTextBlocks, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
-import { translateBlocks, type ImmersiveProgress } from './translator'
 import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal } from './injector'
 import { getMeta } from '~/logic/translators-meta'
+import { detectLang } from '~/logic/lang-utils'
 
 type ImmersiveMode = 'bilingual' | 'translated-only'
 type BlockState = 'pending' | 'queued' | 'translating' | 'done'
 
 let state: 'idle' | 'translating' | 'done' = 'idle'
 let mode: ImmersiveMode = 'bilingual'
-let progress: ImmersiveProgress = { total: 0, done: 0, failed: 0 }
+let progress = { total: 0, done: 0, failed: 0 }
 let abortController: AbortController | null = null
 let panelEl: HTMLElement | null = null
 let apiNameCache = ''
 let showOriginal = true
 let excludeSelectors: string[] = []
+let targetLang = 'zh'
 
 let observer: IntersectionObserver | null = null
 const blockStates = new Map<number, BlockState>()
+const blockIndex = new Map<number, TextBlock>()
 let allBlocks: TextBlock[] = []
 let translateQueue: TextBlock[] = []
 let processing = false
+let sessionId = ''
 let apiConfig: { api: string; apiKey?: string; customConfig?: any } = { api: 'microsoft' }
 
 const PANEL_ID = 'qt-immersive-status-panel'
 const BATCH_SIZE = 5
+const CONCURRENCY = 3
 
+// SPA 路由检测：content script 的 isolated world 里包装 history.pushState
+// 拦截不到页面自身的导航，改用 popstate/hashchange + 轮询兜底
 let lastUrl = location.href
-
-function startRouteWatcher() {
-  const check = () => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href
-      if (state !== 'idle') cleanup()
-    }
-  }
-
-  window.addEventListener('popstate', check)
-
-  const origPush = history.pushState
-  history.pushState = function (...args) {
-    origPush.apply(this, args)
-    check()
-  }
-
-  const origReplace = history.replaceState
-  history.replaceState = function (...args) {
-    origReplace.apply(this, args)
-    check()
+function checkRoute() {
+  if (location.href !== lastUrl) {
+    lastUrl = location.href
+    if (state !== 'idle') cleanup()
   }
 }
-
-startRouteWatcher()
+window.addEventListener('popstate', checkRoute)
+window.addEventListener('hashchange', checkRoute)
+setInterval(checkRoute, 1000)
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -118,6 +108,11 @@ function renderPanel() {
 }
 
 function cleanup() {
+  // 通知 background abort 该会话所有在途请求
+  if (sessionId) {
+    chrome.runtime.sendMessage({ type: 'qt-cancel', payload: { sessionId } }).catch(() => {})
+    sessionId = ''
+  }
   abortController?.abort()
   abortController = null
   observer?.disconnect()
@@ -128,10 +123,19 @@ function cleanup() {
   progress = { total: 0, done: 0, failed: 0 }
   showOriginal = true
   blockStates.clear()
+  blockIndex.clear()
   allBlocks = []
   translateQueue = []
   processing = false
   removePanel()
+}
+
+function exitIdle() {
+  state = 'idle'
+  progress = { total: 0, done: 0, failed: 0 }
+  removePanel()
+  unmarkAllObserved()
+  reportProgress()
 }
 
 function reportProgress() {
@@ -149,7 +153,7 @@ function setupObserver() {
       const id = parseInt((entry.target as HTMLElement).dataset.qtImmersiveObserve || '-1')
       if (id >= 0 && blockStates.get(id) === 'pending') {
         blockStates.set(id, 'queued')
-        const block = allBlocks.find(b => b.id === id)
+        const block = blockIndex.get(id)
         if (block) translateQueue.push(block)
       }
     }
@@ -165,48 +169,56 @@ async function processQueue() {
   if (processing) return
   processing = true
 
-  while (translateQueue.length > 0) {
-    if (abortController?.signal.aborted) break
-
-    const batch = translateQueue.splice(0, BATCH_SIZE)
-    const texts = batch.map(b => b.text)
-
-    try {
-      const res = await new Promise<{ results: (any | null)[] }>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('timeout')), 60000)
-        chrome.runtime.sendMessage({
-          type: 'qt-batch-translate',
-          payload: { texts, from: 'auto', to: 'zh', api: apiConfig.api, apiKey: apiConfig.apiKey, customConfig: apiConfig.customConfig },
-        }).then(r => { clearTimeout(timeout); resolve(r) }).catch(reject)
-      })
-
-      const results = res?.results || []
-      for (let i = 0; i < batch.length; i++) {
-        const block = batch[i]
-        const result = results[i]
-        if (result?.text) {
-          injectTranslation(block.id, result.text, mode, block.isCode)
-        } else {
-          progress.failed++
-        }
-        blockStates.set(block.id, 'done')
-        progress.done++
-      }
-      renderPanel()
-      reportProgress()
-    } catch {
-      for (const block of batch) {
-        blockStates.set(block.id, 'done')
-        progress.done++
-        progress.failed++
-      }
-      renderPanel()
-      reportProgress()
+  const worker = async () => {
+    while (translateQueue.length > 0) {
+      if (abortController?.signal.aborted) return
+      const batch = translateQueue.splice(0, BATCH_SIZE)
+      await translateBatch(batch)
     }
   }
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, Math.ceil(translateQueue.length / BATCH_SIZE)) },
+    () => worker(),
+  )
+  await Promise.all(workers)
 
   processing = false
   checkDone()
+}
+
+async function translateBatch(batch: TextBlock[]) {
+  const texts = batch.map(b => b.text)
+
+  try {
+    const res = await new Promise<{ results: (any | null)[] }>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('timeout')), 60000)
+      chrome.runtime.sendMessage({
+        type: 'qt-batch-translate',
+        payload: { texts, from: 'auto', to: targetLang, api: apiConfig.api, apiKey: apiConfig.apiKey, customConfig: apiConfig.customConfig, sessionId },
+      }).then(r => { clearTimeout(timeout); resolve(r) }).catch(reject)
+    })
+
+    const results = res?.results || []
+    for (let i = 0; i < batch.length; i++) {
+      const block = batch[i]
+      const result = results[i]
+      if (result?.text) {
+        injectTranslation(block.id, result.text, mode, block.isCode)
+      } else {
+        progress.failed++
+      }
+      blockStates.set(block.id, 'done')
+      progress.done++
+    }
+  } catch {
+    for (const block of batch) {
+      blockStates.set(block.id, 'done')
+      progress.done++
+      progress.failed++
+    }
+  }
+  renderPanel()
+  reportProgress()
 }
 
 function checkDone() {
@@ -220,7 +232,7 @@ function checkDone() {
   reportProgress()
 }
 
-async function handleTranslate(payload: { api: string; apiKey?: string; customConfig?: any; mode: ImmersiveMode; all?: boolean }) {
+async function handleTranslate(payload: { api: string; apiKey?: string; customConfig?: any; mode: ImmersiveMode; all?: boolean; to?: string }) {
   if (state === 'translating') return
 
   cleanup()
@@ -230,22 +242,32 @@ async function handleTranslate(payload: { api: string; apiKey?: string; customCo
   progress = { total: 0, done: 0, failed: 0 }
   apiNameCache = getMeta(payload.api).name
   apiConfig = { api: payload.api, apiKey: payload.apiKey, customConfig: payload.customConfig }
+  targetLang = payload.to || 'zh'
+  // 会话标识：取消时 background 据此 abort 在途请求
+  sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   resetBlockId()
   createPanel()
   reportProgress()
 
   allBlocks = collectTextBlocks(excludeSelectors)
   if (allBlocks.length === 0) {
-    state = 'idle'
-    removePanel()
-    reportProgress()
+    exitIdle()
+    return
+  }
+
+  // 页面主语言即目标语言时无需翻译（如中文页面译中文）
+  const sample = allBlocks.slice(0, 30).map(b => b.text).join(' ').slice(0, 3000)
+  if (detectLang(sample) === targetLang) {
+    exitIdle()
     return
   }
 
   progress = { total: allBlocks.length, done: 0, failed: 0 }
+  blockIndex.clear()
   for (const block of allBlocks) {
     markSourceBlock(block.id, block.element)
     blockStates.set(block.id, 'pending')
+    blockIndex.set(block.id, block)
     block.element.setAttribute('data-qt-immersive-observe', String(block.id))
   }
 

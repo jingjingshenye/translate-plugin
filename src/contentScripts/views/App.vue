@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useStorage } from '~/composables/useStorage'
 import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
 import { useFavorites } from '~/composables/useFavorites'
-import { invokeTranslate, invokeLookupDict, type DictMode } from '~/logic/background-api'
-import { detectLang } from '~/logic/lang-utils'
-import { getMeta } from '~/logic/translators-meta'
+import { useHistory } from '~/composables/useHistory'
+import { invokeTranslate, invokeLookupDict, invokeAiTranslate, type DictMode } from '~/logic/background-api'
+import { detectLang, getTargetLang } from '~/logic/lang-utils'
+import { getMeta, FREE_META, isKnownApi } from '~/logic/translators-meta'
+import { speak } from '~/logic/tts'
 import { isValidWord, type DictResult } from '~/logic/dict'
 
 const MAX_SELECTION_LENGTH = 5000
@@ -25,7 +27,10 @@ const popupPos = ref({ x: 0, y: 0 })
 const sourceText = ref('')
 const translatedText = ref('')
 const detectedSrc = ref('')
-const currentApi = useStorage<string>('qt_api', 'microsoft')
+const fallbackUsed = ref(false)
+const currentApi = useStorage<string>('qt_api', FREE_META[0].id)
+// 已下线引擎（如 microsoft 免费源）的存量配置迁移
+watch(currentApi, (v) => { if (v && !isKnownApi(v)) currentApi.value = FREE_META[0].id })
 const apiKeys = useEncryptedKeys('qt_api_keys')
 const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
 const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
@@ -34,6 +39,7 @@ const isWord = ref(false)
 const dictResult = ref<DictResult | null>(null)
 const dictLoading = ref(false)
 const usedApi = ref('')
+const aiResult = ref<{ text: string; api?: string } | null>(null)
 const showLangMenu = ref(false)
 const transFrom = ref('auto')
 const transTo = ref('zh')
@@ -46,14 +52,15 @@ const langMap: Record<string, string> = {
 let selectionRect: DOMRect | null = null
 let reqId = 0 // 防止翻译请求 race
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'translate-text' && message.text) {
-    sourceText.value = message.text
+// 右键菜单翻译入口：由 contentScripts/index.ts 转发的 window 事件（保证 App 已挂载）
+window.addEventListener('qt-translate-text', ((e: CustomEvent<string>) => {
+  if (e.detail) {
+    sourceText.value = e.detail
     selectionRect = null
     popupPos.value = { x: window.innerWidth - 360, y: 20 }
-    doTranslate(message.text)
+    doTranslate(e.detail)
   }
-})
+}) as EventListener)
 
 // ============================================
 // Text measurement (canvas-based, for input/textarea caret positioning)
@@ -96,6 +103,13 @@ function getCaretPosition(element: HTMLInputElement | HTMLTextAreaElement, offse
 // ============================================
 
 function findInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaElement | null {
+  const el = findRawInputElement(event)
+  // 密码框内容不翻译（避免明文密码进入翻译请求与翻译历史）
+  if (el instanceof HTMLInputElement && el.type === 'password') return null
+  return el
+}
+
+function findRawInputElement(event: MouseEvent): HTMLInputElement | HTMLTextAreaElement | null {
   const target = event.target as HTMLElement
   if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return target as HTMLInputElement | HTMLTextAreaElement
   try {
@@ -190,23 +204,36 @@ function onIconClick(event: MouseEvent) {
 
 // ============================================
 // 收藏（composable 统一管理）
+// 哪个成功收藏哪个：翻译成功存译文；翻译失败但词典成功存词典释义
 // ============================================
 const { words: favWords, toggle: toggleFavFn } = useFavorites()
 const isFaved = computed(() => !!favWords.value[sourceText.value])
+const canFav = computed(() =>
+  !!(translatedText.value || dictResult.value?.definitions?.length),
+)
+function favTranslation(): string {
+  if (translatedText.value) return translatedText.value
+  const defs = dictResult.value?.definitions
+  return defs?.length ? defs.slice(0, 3).map(d => d.def).join('；') : ''
+}
 function toggleFav() {
-  if (!sourceText.value) return
-  toggleFavFn(sourceText.value, translatedText.value)
+  if (!sourceText.value || !canFav.value) return
+  toggleFavFn(sourceText.value, favTranslation())
 }
 
 // ============================================
 // 翻译入口（通过 background）
 // ============================================
+const history = useHistory()
+
 async function doTranslate(text: string, overrideFrom?: string, overrideTo?: string) {
   isOpen.value = true
   loading.value = true
   error.value = ''
   translatedText.value = ''
   detectedSrc.value = ''
+  fallbackUsed.value = false
+  aiResult.value = null
   dictResult.value = null
   isWord.value = false
 
@@ -219,6 +246,11 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
   const src = overrideFrom || (transFrom.value !== 'auto' ? transFrom.value : detectLang(text))
   const target = overrideTo || transTo.value || (src === 'zh' ? 'en' : 'zh')
   if (transFrom.value === 'auto') transFrom.value = src
+
+  // AI 对照翻译：与主引擎完全独立，未配置 Key/失败时静默不显示
+  invokeAiTranslate({ text, from: src, to: target })
+    .then(r => { if (myId === reqId && r) aiResult.value = r })
+    .catch(() => {})
 
   // 词典查询（与翻译独立，无 Key 也查）
   let dictPromise: Promise<void> = Promise.resolve()
@@ -257,8 +289,14 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
       translatedText.value = result.text
       detectedSrc.value = result.srcLang
       usedApi.value = result.api || currentApi.value
+      fallbackUsed.value = !!result.viaFallback
+      history.add({ text, translation: result.text, api: usedApi.value, srcLang: result.srcLang })
     })
-    .catch(() => { if (myId === reqId) error.value = '翻译失败' })
+    .catch((e) => {
+      if (myId !== reqId) return
+      // 显示真实失败原因（HTTP 状态码 / 超时 / 网络不通），便于用户自查
+      error.value = e instanceof Error && e.message ? e.message : '翻译失败'
+    })
     .finally(() => { if (myId === reqId) loading.value = false })
 
   await dictPromise
@@ -266,6 +304,22 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
 
 function playAudio(url: string) {
   try { new Audio(url).play().catch(() => {}) } catch {}
+}
+
+const copied = ref(false)
+async function copyText() {
+  if (!translatedText.value) return
+  try {
+    await navigator.clipboard.writeText(translatedText.value)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1200)
+  } catch {}
+}
+
+function speakResult() {
+  if (!translatedText.value) return
+  const target = transTo.value || getTargetLang((detectedSrc.value || 'EN').toLowerCase())
+  speak(translatedText.value, target)
 }
 
 function closePopup() {
@@ -342,7 +396,7 @@ onUnmounted(() => {
               <button class="qt-lang-go" @click="retranslateWithLang">翻译</button>
             </div>
           </div>
-          <button v-if="!loading && !error" class="qt-fav-btn" @click="toggleFav" :title="isFaved ? '取消收藏' : '收藏'">{{ isFaved ? '♥' : '♡' }}</button>
+          <button v-if="sourceText && !loading && canFav" class="qt-fav-btn" @click="toggleFav" :title="isFaved ? '取消收藏' : '收藏'">{{ isFaved ? '♥' : '♡' }}</button>
           <span class="qt-close" @click="closePopup">&times;</span>
         </span>
       </div>
@@ -378,17 +432,25 @@ onUnmounted(() => {
         </template>
 
         <div class="qt-trans-tag">
-          <span class="qt-trans-badge">{{ getMeta(usedApi).name.toUpperCase() }}</span>
+          <span class="qt-trans-badge">{{ getMeta(usedApi).name.toUpperCase() }}{{ fallbackUsed ? ' · 备用' : '' }}</span>
         </div>
         <div v-if="loading" class="qt-loading"><span class="qt-spinner"></span> 翻译中...</div>
         <div v-else-if="error" class="qt-error">
-          {{ error }}
+          <span class="qt-error-msg">{{ error }}</span>
           <button v-if="!error.includes('设置')" class="qt-retry-btn" @click="doTranslate(sourceText)">重试</button>
         </div>
         <div v-else class="qt-result">
           <span class="qt-result-text">{{ translatedText }}</span>
-          <button class="qt-copy-btn" @click="copyText" title="复制">复制</button>
+          <button class="qt-copy-btn" @click="speakResult" title="朗读">🔊</button>
+          <button class="qt-copy-btn" @click="copyText" title="复制">{{ copied ? '✓' : '复制' }}</button>
         </div>
+
+        <template v-if="aiResult">
+          <div class="qt-trans-tag">
+            <span class="qt-trans-badge qt-ai-badge">AI 对照 · {{ aiResult.api ? getMeta(aiResult.api).name : 'AI' }}</span>
+          </div>
+          <div class="qt-ai-result">{{ aiResult.text }}</div>
+        </template>
       </div>
     </div>
   </div>

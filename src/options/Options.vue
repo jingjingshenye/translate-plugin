@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useStorage } from '~/composables/useStorage'
 import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
 import { useFavorites } from '~/composables/useFavorites'
-import { FREE_META, SUBSCRIBE_META, AI_META, ALL_META } from '~/logic/translators-meta'
+import { useHistory } from '~/composables/useHistory'
+import { FREE_META, SUBSCRIBE_META, AI_META, ALL_META, isKnownApi } from '~/logic/translators-meta'
 
-const api = useStorage<string>('qt_api', 'microsoft')
+const api = useStorage<string>('qt_api', FREE_META[0].id)
 const fromLang = useStorage<string>('qt_from', 'auto')
 const toLang = useStorage<string>('qt_to', 'zh')
 const apiKeys = useEncryptedKeys('qt_api_keys')
@@ -13,8 +14,22 @@ const apiModels = useStorage<Record<string, string>>('qt_api_models', {})
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<'bilingual' | 'translated-only'>('qt_immersive_mode', 'bilingual')
+const immersiveTo = useStorage<string>('qt_immersive_to', '')
+const aiCompare = useStorage<string>('qt_ai_compare', 'auto')
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
+const fallbackDisabled = useStorage<string[]>('qt_fallback_disabled', [])
+
+function isFallbackOn(id: string) { return !fallbackList().includes(id) }
+function fallbackList(): string[] {
+  // 防御：storage 坏数据（非数组）时不崩
+  return Array.isArray(fallbackDisabled.value) ? fallbackDisabled.value : []
+}
+function toggleFallback(id: string) {
+  fallbackDisabled.value = isFallbackOn(id)
+    ? [...fallbackList(), id]
+    : fallbackList().filter(i => i !== id)
+}
 
 const skipLangOptions = [
   { id: 'zh', label: '中文' },
@@ -33,9 +48,18 @@ const customApi = useStorage('qt_custom_api', {
 })
 
 const { list: favList, count: favCount, toggle: toggleFav, setTranslation: setFavTranslation, clear: clearFavs, exportList, importList } = useFavorites()
+const { list: historyList, remove: removeHistory, clear: clearHistory, exportList: exportHistory } = useHistory()
 
-const tab = ref<'api' | 'immersive' | 'dict' | 'fav'>('api')
+function copyText(text: string) { navigator.clipboard.writeText(text) }
+function clearAllHistory() { if (confirm('确定清空所有翻译历史？')) clearHistory() }
+
+const tab = ref<'api' | 'immersive' | 'dict' | 'fav' | 'history'>('api')
 const editingApi = ref<string>('')
+const version = __VERSION__
+
+// 已下线引擎（如 microsoft 免费源）的存量配置迁移到可用默认值；
+// storage 异步加载完成后值才会到达，用 watch 捕获
+watch(api, (v) => { if (v && !isKnownApi(v)) api.value = FREE_META[0].id })
 
 function setApiKey(id: string, key: string) {
   apiKeys.value = { ...apiKeys.value, [id]: key }
@@ -43,6 +67,27 @@ function setApiKey(id: string, key: string) {
 
 function setApiModel(id: string, model: string) {
   apiModels.value = { ...apiModels.value, [id]: model }
+}
+
+// API 连通性测试：经 background 直连引擎，真实校验 key（不走缓存）
+const testingApi = ref('')
+const testResults = ref<Record<string, { ok: boolean; text?: string; error?: string }>>({})
+
+async function testApi(id: string) {
+  if (testingApi.value) return
+  testingApi.value = id
+  delete testResults.value[id]
+  try {
+    const res: any = await chrome.runtime.sendMessage({
+      type: 'qt-test-api',
+      payload: { api: id, apiKey: apiKeys.value[id], customConfig: id === 'custom' ? customApi.value : undefined },
+    })
+    testResults.value = { ...testResults.value, [id]: res?.ok ? { ok: true, text: res.text } : { ok: false, error: res?.error || '连接失败' } }
+  } catch (e: any) {
+    testResults.value = { ...testResults.value, [id]: { ok: false, error: e?.message || '发送失败' } }
+  } finally {
+    testingApi.value = ''
+  }
 }
 
 // 收藏
@@ -93,7 +138,10 @@ function exportCSV() {
 }
 function exportJSON() { download(JSON.stringify(Object.fromEntries(filteredWords.value), null, 2), 'vocabulary.json', 'application/json') }
 function download(content: string, name: string, type: string) {
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = name; a.click()
+  const a = document.createElement('a')
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  a.href = url; a.download = name; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 </script>
 
@@ -109,6 +157,7 @@ function download(content: string, name: string, type: string) {
       <button :class="{ active: tab === 'immersive' }" @click="tab = 'immersive'">沉浸式翻译</button>
       <button :class="{ active: tab === 'dict' }" @click="tab = 'dict'">词典</button>
       <button :class="{ active: tab === 'fav' }" @click="tab = 'fav'">生词本 <em v-if="stats.total">({{ stats.total }})</em></button>
+      <button :class="{ active: tab === 'history' }" @click="tab = 'history'">历史 <em v-if="historyList.length">({{ historyList.length }})</em></button>
     </nav>
 
     <main class="main">
@@ -136,10 +185,33 @@ function download(content: string, name: string, type: string) {
         </section>
 
         <section class="card">
+          <h2>自动备用源（Fallback）</h2>
+          <p class="hint" style="margin-bottom:12px">所选引擎翻译失败时，自动改用勾选的免费源完成翻译（结果旁会标注「备用」）。不想被自动使用的源（如 Google）取消勾选即可。</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px 16px;">
+            <label v-for="t in FREE_META" :key="t.id" style="display:flex;align-items:center;gap:5px;font-size:13px;color:var(--qt-text);cursor:pointer;">
+              <input type="checkbox" :checked="isFallbackOn(t.id)" @change="toggleFallback(t.id)" style="accent-color:#0ea5e9;" />
+              {{ t.name }}
+            </label>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>免费源连通性测试</h2>
+          <p class="hint" style="margin-bottom:12px">免费源无需 Key，点「测试」检查在你的网络下是否可用。测出不可用的源建议在上方「自动备用源」中取消勾选，避免翻译时白等超时。</p>
+          <div v-for="t in FREE_META" :key="t.id" class="free-test-row">
+            <label class="free-test-name">{{ t.name }}</label>
+            <button class="test-btn" :disabled="!!testingApi" @click="testApi(t.id)">{{ testingApi === t.id ? '测试中' : '测试' }}</button>
+            <span v-if="testResults[t.id]" class="test-result-inline" :class="testResults[t.id].ok ? 'ok' : 'fail'">
+              {{ testResults[t.id].ok ? '✓ 可用：' + testResults[t.id].text : '✗ ' + testResults[t.id].error }}
+            </span>
+          </div>
+        </section>
+
+        <section class="card">
           <h2>划词行为</h2>
           <p class="hint" style="margin-bottom:12px">选中以下语言的文本时，不显示翻译图标（可多选）</p>
           <div style="display:flex;flex-wrap:wrap;gap:10px 16px;">
-            <label v-for="l in skipLangOptions" :key="l.id" style="display:flex;align-items:center;gap:5px;font-size:13px;color:#0c4a6e;cursor:pointer;">
+            <label v-for="l in skipLangOptions" :key="l.id" style="display:flex;align-items:center;gap:5px;font-size:13px;color:var(--qt-text);cursor:pointer;">
               <input type="checkbox" :value="l.id" v-model="skipLangs" style="accent-color:#0ea5e9;" />
               {{ l.label }}
             </label>
@@ -148,31 +220,72 @@ function download(content: string, name: string, type: string) {
 
         <section class="card">
           <h2>订阅源 API Key</h2>
-          <p class="hint" style="margin-bottom:12px">传统翻译接口，按量付费，翻译质量稳定。Key 本地 AES-GCM 加密存储。</p>
-          <div v-for="t in SUBSCRIBE_META" :key="t.id" class="api-row">
-            <label>{{ t.name }}</label>
-            <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
-              @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
-              @focus="editingApi = t.id" @blur="editingApi = ''"
-              :placeholder="t.id === 'tencent_official' ? 'SecretId:SecretKey' : t.id === 'baidu_official' ? 'AppID:密钥' : 'API Key'" />
+          <p class="hint" style="margin-bottom:12px">传统翻译接口，按量付费，翻译质量稳定。Key 本地 AES-GCM 加密存储。DeepL 有每月 50 万字符免费额度。</p>
+          <div v-for="t in SUBSCRIBE_META" :key="t.id" class="api-block">
+            <div class="api-head">
+              <label>{{ t.name }}</label>
+              <div class="api-head-actions">
+                <a v-if="t.freeTier" class="free-badge" :title="t.freeTier">有免费额度</a>
+                <a v-if="t.signupUrl" :href="t.signupUrl" target="_blank" class="signup-link">{{ t.freeTier ? '免费注册 ↗' : '获取 Key ↗' }}</a>
+              </div>
+            </div>
+            <p v-if="t.freeTier" class="free-tier-desc">{{ t.freeTier }}</p>
+            <p v-if="t.pricing" class="pricing-desc">{{ t.pricing }}</p>
+            <div class="api-row">
+              <label>Key</label>
+              <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
+                @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
+                @focus="editingApi = t.id" @blur="editingApi = ''"
+                :placeholder="t.id === 'azure' ? 'Key 或 Key:Region（如 xxx:eastasia）' : t.id === 'tencent_official' ? 'SecretId:SecretKey' : t.id === 'baidu_official' ? 'AppID:密钥' : 'API Key'" />
+              <button class="test-btn" :disabled="!!testingApi" @click="testApi(t.id)">{{ testingApi === t.id ? '测试中' : '测试' }}</button>
+            </div>
+            <div v-if="testResults[t.id]" class="test-result" :class="testResults[t.id].ok ? 'ok' : 'fail'">
+              {{ testResults[t.id].ok ? '✓ 连接成功：' + testResults[t.id].text : '✗ ' + testResults[t.id].error }}
+            </div>
           </div>
         </section>
 
         <section class="card">
           <h2>AI 翻译 API Key</h2>
-          <p class="hint" style="margin-bottom:12px">大语言模型翻译，支持上下文理解。可自定义模型名（留空使用默认）。</p>
+          <p class="hint" style="margin-bottom:12px">大语言模型翻译，支持上下文理解。标注「有免费额度」的源可免费注册领取额度直接使用；填好 Key 后点「测试」验证连通性。模型名留空使用默认。</p>
           <div v-for="t in AI_META" :key="t.id" class="api-block">
-            <div class="api-row">
+            <div class="api-head">
               <label>{{ t.name }}</label>
+              <div class="api-head-actions">
+                <span v-if="t.freeTier" class="free-badge" :title="t.freeTier">有免费额度</span>
+                <a v-if="t.signupUrl" :href="t.signupUrl" target="_blank" class="signup-link">{{ t.freeTier ? '免费注册 ↗' : '获取 Key ↗' }}</a>
+              </div>
+            </div>
+            <p v-if="t.freeTier" class="free-tier-desc">{{ t.freeTier }}</p>
+            <p v-if="t.pricing" class="pricing-desc">{{ t.pricing }}</p>
+            <div class="api-row">
+              <label>Key</label>
               <input :type="editingApi === t.id ? 'text' : 'password'" :value="apiKeys[t.id] || ''"
                 @input="setApiKey(t.id, ($event.target as HTMLInputElement).value)"
                 @focus="editingApi = t.id" @blur="editingApi = ''"
                 :placeholder="t.name + ' API Key'" />
+              <button class="test-btn" :disabled="!!testingApi" @click="testApi(t.id)">{{ testingApi === t.id ? '测试中' : '测试' }}</button>
             </div>
             <div class="api-row api-row-model">
               <label>模型</label>
               <input :value="apiModels[t.id] || ''" @input="setApiModel(t.id, ($event.target as HTMLInputElement).value)" placeholder="留空使用默认模型" />
             </div>
+            <div v-if="testResults[t.id]" class="test-result" :class="testResults[t.id].ok ? 'ok' : 'fail'">
+              {{ testResults[t.id].ok ? '✓ 连接成功：' + testResults[t.id].text : '✗ ' + testResults[t.id].error }}
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>AI 对照翻译</h2>
+          <p class="hint" style="margin-bottom:12px">划词/弹窗翻译时，额外请求一份 AI 译文对照显示（与主引擎互相独立、不参与备用切换）。未配置任何 AI Key 或请求失败时自动不显示。同一文本的结果会缓存，不重复消耗额度。</p>
+          <div class="row">
+            <label>模式</label>
+            <select v-model="aiCompare">
+              <option value="auto">自动（第一个已配置 Key 的 AI 源）</option>
+              <option value="off">关闭</option>
+              <option v-for="t in AI_META" :key="t.id" :value="t.id">{{ t.name }}</option>
+            </select>
           </div>
         </section>
 
@@ -194,6 +307,12 @@ function download(content: string, name: string, type: string) {
           <div class="row">
             <label>Prompt</label>
             <input v-model="customApi.prompt" type="text" placeholder="自定义系统提示词（可选）" />
+          </div>
+          <div class="custom-test-row">
+            <button class="test-btn" :disabled="!!testingApi || !customApi.url" @click="testApi('custom')">{{ testingApi === 'custom' ? '测试中' : '测试连接' }}</button>
+            <span v-if="testResults.custom" class="test-result" :class="testResults.custom.ok ? 'ok' : 'fail'">
+              {{ testResults.custom.ok ? '✓ ' + testResults.custom.text : '✗ ' + testResults.custom.error }}
+            </span>
           </div>
         </section>
       </template>
@@ -220,12 +339,22 @@ function download(content: string, name: string, type: string) {
               <option value="translated-only">仅显示译文</option>
             </select>
           </div>
+          <div class="row">
+            <label>目标语言</label>
+            <select v-model="immersiveTo">
+              <option value="">跟随划词设置</option>
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+          </div>
         </section>
 
         <section class="card">
           <h2>排除选择器</h2>
           <p class="hint" style="margin-bottom:8px">指定不翻译的区域（每行一个 CSS 选择器）。内置排除：导航栏、广告、评论区、侧边栏等。</p>
-          <textarea v-model="immersiveExclude" rows="4" placeholder="例如：&#10;.my-sidebar&#10;#ad-container&#10;.code-block" style="width:100%;padding:8px;background:#f8fbff;border:1px solid rgba(56,189,248,.15);border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;outline:none;color:#0c4a6e"></textarea>
+          <textarea v-model="immersiveExclude" rows="4" placeholder="例如：&#10;.my-sidebar&#10;#ad-container&#10;.code-block" style="width:100%;padding:8px;background:var(--qt-input);border:1px solid rgba(56,189,248,.15);border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;outline:none;color:var(--qt-text)"></textarea>
           <div style="margin-top:8px">
             <div class="hint" style="margin-bottom:4px"><strong>内置排除规则（始终生效）：</strong></div>
             <div class="hint" style="font-family:monospace;font-size:10px;line-height:1.6;word-break:break-all">nav, header, footer, .sidebar, .ad, .ads, .advert, [class*="ad-"], [id*="google_ads"], .comments, #comments, .related-posts, .social-share, .newsletter, .cookie-banner, .popup-overlay, [role="navigation"], [aria-hidden="true"]</div>
@@ -375,104 +504,170 @@ function download(content: string, name: string, type: string) {
           </div>
         </section>
       </template>
+      <!-- ==================== 翻译历史 ==================== -->
+      <template v-if="tab === 'history'">
+        <section class="card">
+          <div class="toolbar">
+            <span class="hint">最近 {{ historyList.length }} 条翻译记录（同文本自动去重，最多保留 100 条）</span>
+            <div class="toolbar-actions">
+              <button class="tool-btn" @click="copyText(exportHistory())" title="复制全部">📋 复制</button>
+              <button v-if="historyList.length" class="tool-btn tool-danger" @click="clearAllHistory" title="清空">🗑 清空</button>
+            </div>
+          </div>
+
+          <div v-if="historyList.length" class="history-list">
+            <div v-for="item in historyList" :key="item.text" class="history-item">
+              <div class="history-main">
+                <div class="history-text">{{ item.text }}</div>
+                <div class="history-trans">{{ item.translation }}</div>
+              </div>
+              <div class="history-meta">
+                <span class="history-time">{{ formatDate(item.ts) }} · {{ item.api }}</span>
+                <div class="word-actions">
+                  <button class="word-btn" @click="copyText(item.translation)" title="复制译文">📋</button>
+                  <button class="word-btn word-btn-del" @click="removeHistory(item.text)" title="删除">&times;</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="empty">
+            <div class="empty-icon">🕘</div>
+            <div class="empty-title">暂无翻译历史</div>
+            <div class="empty-desc">划词翻译和弹窗翻译的成功记录会出现在这里</div>
+          </div>
+        </section>
+      </template>
     </main>
 
     <footer class="footer">
-      <p>Quick Translate v1.1.0 · {{ ALL_META.length }}种翻译源 · API Key AES-GCM 加密</p>
+      <p>Quick Translate v{{ version }} · {{ ALL_META.length }}种翻译源 · API Key AES-GCM 加密</p>
     </footer>
   </div>
 </template>
 
 <style scoped>
-.page { min-height: 100vh; background: #f0f9ff; color: #0c4a6e; font-family: system-ui, sans-serif; }
-.header { display: flex; align-items: center; gap: 12px; padding: 20px 32px; border-bottom: 1px solid rgba(56,189,248,0.15); background: linear-gradient(90deg, rgba(56,189,248,0.08), transparent); }
+.page { min-height: 100vh; background: var(--qt-bg); color: var(--qt-text); font-family: system-ui, sans-serif; }
+.header { display: flex; align-items: center; gap: 12px; padding: 20px 32px; border-bottom: 1px solid var(--qt-border-light); background: linear-gradient(90deg, var(--qt-bar), transparent); }
 .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, #38bdf8, #7dd3fc); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: #fff; }
 .header h1 { font-size: 18px; font-weight: 700; }
-.header span { color: #64748b; font-weight: 400; }
+.header span { color: var(--qt-text-light); font-weight: 400; }
 
-.tabs { display: flex; gap: 0; max-width: 760px; margin: 0 auto; padding: 0 32px; border-bottom: 1px solid rgba(56,189,248,0.15); }
-.tabs button { padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent; color: #64748b; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.tabs { display: flex; gap: 0; max-width: 760px; margin: 0 auto; padding: 0 32px; border-bottom: 1px solid var(--qt-border-light); }
+.tabs button { padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--qt-text-light); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
 .tabs button.active { color: #0ea5e9; border-bottom-color: #0ea5e9; }
-.tabs button em { font-style: normal; color: #94a3b8; font-size: 11px; }
+.tabs button em { font-style: normal; color: var(--qt-text-dim); font-size: 11px; }
 
 .main { max-width: 760px; margin: 0 auto; padding: 16px 32px; }
-.card { background: #fff; border: 1px solid rgba(56,189,248,0.15); border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
-.card h2 { font-size: 14px; font-weight: 600; color: #0ea5e9; margin: 0 0 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(56,189,248,0.1); }
-.hint { font-size: 11px; color: #94a3b8; }
+.card { background: var(--qt-card); border: 1px solid var(--qt-border-light); border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
+.card h2 { font-size: 14px; font-weight: 600; color: #0ea5e9; margin: 0 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--qt-bar); }
+.hint { font-size: 11px; color: var(--qt-text-dim); }
 
 .row { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .row:last-child { margin-bottom: 0; }
-.row label:first-child { width: 72px; flex-shrink: 0; font-size: 13px; color: #64748b; }
-.row select, .row input[type="text"] { flex: 1; padding: 7px 10px; background: #f0f9ff; border: 1px solid rgba(56,189,248,0.2); border-radius: 6px; color: #0c4a6e; font-size: 13px; outline: none; }
+.row label:first-child { width: 72px; flex-shrink: 0; font-size: 13px; color: var(--qt-text-light); }
+.row select, .row input[type="text"] { flex: 1; padding: 7px 10px; background: var(--qt-bg); border: 1px solid var(--qt-border); border-radius: 6px; color: var(--qt-text); font-size: 13px; outline: none; }
 .row select:focus, .row input:focus { border-color: #38bdf8; }
-.row select option, .row select optgroup { background: #f0f9ff; color: #0c4a6e; }
+.row select option, .row select optgroup { background: var(--qt-bg); color: var(--qt-text); }
 
 .api-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.api-row label { width: 90px; flex-shrink: 0; font-size: 12px; color: #64748b; }
-.api-row input { flex: 1; padding: 6px 8px; background: #f8fbff; border: 1px solid rgba(56,189,248,0.15); border-radius: 5px; color: #0c4a6e; font-size: 12px; outline: none; }
+.api-row label { width: 90px; flex-shrink: 0; font-size: 12px; color: var(--qt-text-light); }
+.api-row input { flex: 1; padding: 6px 8px; background: var(--qt-input); border: 1px solid var(--qt-border-light); border-radius: 5px; color: var(--qt-text); font-size: 12px; outline: none; }
 .api-row input:focus { border-color: #38bdf8; }
 
-.api-block { padding: 10px 12px; background: #f8fbff; border: 1px solid rgba(56,189,248,0.1); border-radius: 8px; margin-bottom: 10px; }
+.api-block { padding: 10px 12px; background: var(--qt-input); border: 1px solid var(--qt-bar); border-radius: 8px; margin-bottom: 10px; }
 .api-block .api-row { margin-bottom: 6px; }
 .api-block .api-row:last-child { margin-bottom: 0; }
-.api-row-model label { color: #94a3b8; font-size: 11px; }
+
+.api-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.api-head label { font-size: 12px; color: var(--qt-text-light); }
+.api-head-actions { display: flex; align-items: center; gap: 8px; }
+.free-badge { font-size: 10px; font-weight: 600; color: #10b981; background: rgba(16,185,129,0.14); padding: 1px 6px; border-radius: 3px; cursor: default; }
+.free-tier-desc { font-size: 11px; color: #10b981; margin: -2px 0 6px; }
+.pricing-desc { font-size: 11px; color: var(--qt-text-dim); margin: -2px 0 6px; }
+.signup-link { font-size: 11px; color: var(--qt-primary-dark); text-decoration: none; opacity: .85; }
+.signup-link:hover { opacity: 1; text-decoration: underline; }
+.test-btn { flex-shrink: 0; padding: 5px 10px; font-size: 11px; border: 1px solid var(--qt-border); background: var(--qt-card); color: var(--qt-primary-dark); border-radius: 4px; cursor: pointer; transition: all .15s; }
+.test-btn:hover:not(:disabled) { background: var(--qt-bar); }
+.test-btn:disabled { opacity: .5; cursor: not-allowed; }
+.test-result { font-size: 11px; margin-top: 6px; word-break: break-all; }
+.test-result.ok { color: #10b981; }
+.test-result.fail { color: #ef4444; }
+.custom-test-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+
+.free-test-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.free-test-row:last-child { margin-bottom: 0; }
+.free-test-name { flex-shrink: 0; width: 110px; font-size: 12px; color: var(--qt-text-light); }
+.test-result-inline { font-size: 11px; min-width: 0; word-break: break-all; }
+.test-result-inline.ok { color: #10b981; }
+.test-result-inline.fail { color: #ef4444; }
+
+.history-list { margin-top: 12px; max-height: 500px; overflow-y: auto; }
+.history-item { padding: 8px 0; border-bottom: 1px solid var(--qt-border-light); }
+.history-item:last-child { border-bottom: none; }
+.history-main { min-width: 0; }
+.history-text { font-size: 12px; font-weight: 600; color: var(--qt-text); word-break: break-all; }
+.history-trans { font-size: 12px; color: var(--qt-text-light); margin-top: 2px; word-break: break-all; }
+.history-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+.history-time { font-size: 10px; color: var(--qt-text-dim); }
+.api-row-model label { color: var(--qt-text-dim); font-size: 11px; }
 .api-row-model input { font-size: 11px; padding: 4px 8px; }
 
 .dict-options { display: flex; flex-direction: column; gap: 8px; }
 .dict-option {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
-  background: #f8fbff; border: 2px solid rgba(56,189,248,0.15); border-radius: 8px;
+  background: var(--qt-input); border: 2px solid var(--qt-border-light); border-radius: 8px;
   cursor: pointer; transition: all 0.2s;
 }
 .dict-option:hover { border-color: rgba(56,189,248,0.3); }
 .dict-option.active { border-color: #0ea5e9; background: rgba(56,189,248,0.05); }
 .dict-icon { font-size: 24px; }
 .dict-info { flex: 1; }
-.dict-name { font-size: 14px; font-weight: 600; color: #0c4a6e; margin-bottom: 2px; }
-.dict-desc { font-size: 11px; color: #64748b; }
+.dict-name { font-size: 14px; font-weight: 600; color: var(--qt-text); margin-bottom: 2px; }
+.dict-desc { font-size: 11px; color: var(--qt-text-light); }
 .dict-check { width: 20px; height: 20px; border-radius: 50%; background: #0ea5e9; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; }
 
 .source-list { display: flex; flex-direction: column; gap: 8px; }
 .source-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .source-badge { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
-.source-badge.local { background: rgba(16,185,129,0.1); color: #10b981; }
+.source-badge.local { background: rgba(16,185,129,0.14); color: #10b981; }
 .source-badge.online { background: rgba(59,130,246,0.1); color: #3b82f6; }
-.source-name { font-weight: 500; color: #0c4a6e; min-width: 70px; }
-.source-detail { color: #64748b; }
+.source-name { font-weight: 500; color: var(--qt-text); min-width: 70px; }
+.source-detail { color: var(--qt-text-light); }
 
 .stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
-.stat-card { flex: 1; background: #fff; border: 1px solid rgba(56,189,248,0.12); border-radius: 10px; padding: 14px; text-align: center; }
+.stat-card { flex: 1; background: var(--qt-card); border: 1px solid var(--qt-border-light); border-radius: 10px; padding: 14px; text-align: center; }
 .stat-num { font-size: 24px; font-weight: 700; color: #0ea5e9; }
-.stat-label { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+.stat-label { font-size: 11px; color: var(--qt-text-dim); margin-top: 2px; }
 
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .search-box { flex: 1; min-width: 140px; position: relative; display: flex; align-items: center; }
 .search-icon { position: absolute; left: 8px; font-size: 12px; opacity: 0.5; }
-.search-box input { width: 100%; padding: 6px 28px 6px 28px; background: #f0f9ff; border: 1px solid rgba(56,189,248,0.2); border-radius: 6px; font-size: 12px; outline: none; color: #0c4a6e; }
+.search-box input { width: 100%; padding: 6px 28px 6px 28px; background: var(--qt-bg); border: 1px solid var(--qt-border); border-radius: 6px; font-size: 12px; outline: none; color: var(--qt-text); }
 .search-box input:focus { border-color: #38bdf8; }
-.search-clear { position: absolute; right: 6px; background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 14px; }
+.search-clear { position: absolute; right: 6px; background: none; border: none; color: var(--qt-text-dim); cursor: pointer; font-size: 14px; }
 .toolbar-actions { display: flex; gap: 4px; align-items: center; }
-.sort-sel { padding: 5px 6px; background: #f0f9ff; border: 1px solid rgba(56,189,248,0.15); border-radius: 5px; font-size: 11px; color: #64748b; outline: none; }
-.tool-btn { padding: 4px 8px; background: #f0f9ff; border: 1px solid rgba(56,189,248,0.12); border-radius: 5px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
-.tool-btn:hover { background: rgba(56,189,248,0.1); }
+.sort-sel { padding: 5px 6px; background: var(--qt-bg); border: 1px solid var(--qt-border-light); border-radius: 5px; font-size: 11px; color: var(--qt-text-light); outline: none; }
+.tool-btn { padding: 4px 8px; background: var(--qt-bg); border: 1px solid var(--qt-border-light); border-radius: 5px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.tool-btn:hover { background: var(--qt-bar); }
 .tool-danger:hover { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.2); }
 
-.import-area { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(56,189,248,0.1); }
-.import-area textarea { width: 100%; padding: 6px 8px; background: #f8fbff; border: 1px solid rgba(56,189,248,0.15); border-radius: 5px; font-size: 12px; resize: vertical; outline: none; color: #0c4a6e; }
+.import-area { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--qt-bar); }
+.import-area textarea { width: 100%; padding: 6px 8px; background: var(--qt-input); border: 1px solid var(--qt-border-light); border-radius: 5px; font-size: 12px; resize: vertical; outline: none; color: var(--qt-text); }
 .import-actions { display: flex; gap: 6px; margin-top: 6px; }
 
 .word-list { margin-top: 12px; max-height: 500px; overflow-y: auto; }
 .word-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(56,189,248,0.06); }
 .word-item:last-child { border-bottom: none; }
 .word-main { flex: 1; min-width: 0; }
-.word-text { font-size: 14px; font-weight: 600; color: #0c4a6e; margin-bottom: 2px; }
-.word-trans { font-size: 12px; color: #64748b; cursor: pointer; padding: 2px 4px; border-radius: 3px; transition: background 0.15s; }
-.word-trans:hover { background: rgba(56,189,248,0.08); }
+.word-text { font-size: 14px; font-weight: 600; color: var(--qt-text); margin-bottom: 2px; }
+.word-trans { font-size: 12px; color: var(--qt-text-light); cursor: pointer; padding: 2px 4px; border-radius: 3px; transition: background 0.15s; }
+.word-trans:hover { background: var(--qt-bar); }
 .word-edit { display: flex; gap: 4px; align-items: center; }
-.word-edit input { flex: 1; padding: 3px 6px; background: #f0f9ff; border: 1px solid #38bdf8; border-radius: 4px; font-size: 12px; outline: none; color: #0c4a6e; }
+.word-edit input { flex: 1; padding: 3px 6px; background: var(--qt-bg); border: 1px solid #38bdf8; border-radius: 4px; font-size: 12px; outline: none; color: var(--qt-text); }
 .edit-save { padding: 2px 6px; background: #0ea5e9; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; }
 .word-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.word-time { font-size: 10px; color: #94a3b8; }
+.word-time { font-size: 10px; color: var(--qt-text-dim); }
 .word-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
 .word-item:hover .word-actions { opacity: 1; }
 .word-btn { padding: 2px 4px; background: none; border: none; cursor: pointer; font-size: 11px; opacity: 0.5; transition: opacity 0.15s; }
@@ -481,14 +676,14 @@ function download(content: string, name: string, type: string) {
 
 .empty { text-align: center; padding: 40px 20px; }
 .empty-icon { font-size: 36px; margin-bottom: 8px; }
-.empty-title { font-size: 14px; font-weight: 500; color: #64748b; margin-bottom: 4px; }
-.empty-desc { font-size: 12px; color: #94a3b8; }
+.empty-title { font-size: 14px; font-weight: 500; color: var(--qt-text-light); margin-bottom: 4px; }
+.empty-desc { font-size: 12px; color: var(--qt-text-dim); }
 
 .btn { padding: 6px 14px; background: linear-gradient(135deg, #0ea5e9, #38bdf8); color: #fff; border: none; border-radius: 5px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
-.btn-ghost { background: transparent; color: #64748b; }
-.btn-ghost:hover { background: rgba(56,189,248,0.08); }
+.btn-ghost { background: transparent; color: var(--qt-text-light); }
+.btn-ghost:hover { background: var(--qt-bar); }
 
-.footer { text-align: center; padding: 16px 0; color: #94a3b8; font-size: 11px; }
+.footer { text-align: center; padding: 16px 0; color: var(--qt-text-dim); font-size: 11px; }
 </style>

@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useStorage } from '~/composables/useStorage'
 import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
-import { invokeTranslate, invokeLookupDict, type DictMode } from '~/logic/background-api'
+import { useFavorites } from '~/composables/useFavorites'
+import { useHistory } from '~/composables/useHistory'
+import { invokeTranslate, invokeLookupDict, invokeAiTranslate, type DictMode } from '~/logic/background-api'
 import { detectLang, getTargetLang } from '~/logic/lang-utils'
-import { FREE_META, SUBSCRIBE_META, AI_META, getMeta } from '~/logic/translators-meta'
+import { FREE_META, SUBSCRIBE_META, AI_META, getMeta, isKnownApi } from '~/logic/translators-meta'
+import { speak } from '~/logic/tts'
 import { isValidWord, type DictResult } from '~/logic/dict'
 
 type ImmersiveState = 'idle' | 'translating' | 'done' | 'error'
@@ -19,10 +22,11 @@ const error = ref('')
 const loading = ref(false)
 const copied = ref(false)
 const detectedSrc = ref('')
+const fallbackUsed = ref(false)
 const usedApi = ref('')
 const fromLang = useStorage<string>('qt_from', 'auto')
 const toLang = useStorage<string>('qt_to', 'zh')
-const currentApi = useStorage<string>('qt_api', 'microsoft')
+const currentApi = useStorage<string>('qt_api', FREE_META[0].id)
 const apiKeys = useEncryptedKeys('qt_api_keys')
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
 const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
@@ -30,6 +34,7 @@ const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o
 const isWord = ref(false)
 const dictResult = ref<DictResult | null>(null)
 const dictLoading = ref(false)
+const aiResult = ref<{ text: string; api?: string } | null>(null)
 
 function swapLang() {
   if (fromLang.value === 'auto') return
@@ -46,7 +51,8 @@ async function doTranslate() {
   if (!inputText.value.trim() || loading.value) return
   loading.value = true; result.value = ''; error.value = ''
   copied.value = false; detectedSrc.value = ''; usedApi.value = ''
-  isWord.value = false; dictResult.value = null
+  fallbackUsed.value = false
+  isWord.value = false; dictResult.value = null; aiResult.value = null
 
   const text = inputText.value.trim()
   const word = isValidWord(text)
@@ -68,6 +74,11 @@ async function doTranslate() {
   let from = fromLang.value, to = toLang.value
   if (from === 'auto') { from = detectLang(text); to = getTargetLang(from) }
 
+  // AI 对照翻译：与主引擎完全独立，未配置 Key/失败时静默不显示
+  invokeAiTranslate({ text, from, to })
+    .then(r => { if (r) aiResult.value = r })
+    .catch(() => {})
+
   invokeTranslate({
     text, from, to,
     api: currentApi.value,
@@ -78,8 +89,10 @@ async function doTranslate() {
       result.value = res.text
       detectedSrc.value = res.srcLang
       usedApi.value = res.api || currentApi.value
+      fallbackUsed.value = !!res.viaFallback
+      history.add({ text, translation: res.text, api: usedApi.value, srcLang: res.srcLang })
     })
-    .catch(() => { error.value = '翻译失败' })
+    .catch((e) => { error.value = e instanceof Error && e.message ? e.message : '翻译失败' })
     .finally(() => { loading.value = false })
 
   if (word) {
@@ -99,18 +112,48 @@ async function copyResult() {
   copied.value = true; setTimeout(() => { copied.value = false }, 1200)
 }
 
+function speakResult() {
+  if (!result.value) return
+  const target = fromLang.value === 'auto'
+    ? getTargetLang((detectedSrc.value || detectLang(inputText.value)).toLowerCase())
+    : toLang.value
+  speak(result.value, target)
+}
+
+// 收藏（与页面内划词弹窗共用同一份存储）
+// 哪个成功收藏哪个：翻译成功存译文；翻译失败但词典成功存词典释义
+const { words: favWords, toggle: toggleFavFn } = useFavorites()
+const isFaved = computed(() => !!favWords.value[inputText.value.trim()])
+function favTranslation(): string {
+  if (result.value) return result.value
+  const defs = dictResult.value?.definitions
+  return defs?.length ? defs.slice(0, 3).map(d => d.def).join('；') : ''
+}
+function toggleFav() {
+  const text = inputText.value.trim()
+  if (text && (result.value || dictResult.value?.definitions?.length)) {
+    toggleFavFn(text, favTranslation())
+  }
+}
+
 function openOptions() { chrome.runtime.openOptionsPage() }
+
+// 已下线引擎（如 microsoft 免费源）的存量配置迁移；storage 异步加载完成后触发
+watch(currentApi, (v) => { if (v && !isKnownApi(v)) currentApi.value = FREE_META[0].id })
 
 // ========== 全文翻译 ==========
 const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<ImmersiveMode>('qt_immersive_mode', 'bilingual')
+const immersiveTo = useStorage<string>('qt_immersive_to', '') // 空 = 跟随划词目标语言
 const immersiveKeys = useEncryptedKeys('qt_api_keys')
 const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
+const history = useHistory()
 
 const immersiveState = ref<ImmersiveState>('idle')
 const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
 const immersiveError = ref('')
+let activeTabId = 0
 
 const effectiveImmersiveApi = computed(() => immersiveApi.value || currentApi.value)
 const immersivePercent = computed(() => {
@@ -118,8 +161,10 @@ const immersivePercent = computed(() => {
   return Math.round(immersiveProgress.value.done / immersiveProgress.value.total * 100)
 })
 
-function onImmersiveProgress(msg: any) {
+function onImmersiveProgress(msg: any, sender: chrome.runtime.MessageSender) {
   if (msg.type === 'qt-immersive-progress') {
+    // 多 tab 可能同时翻译，只响应当前 tab 的进度；activeTabId=0（查询失败）时不过滤
+    if (activeTabId !== 0 && sender.tab?.id != null && sender.tab.id !== activeTabId) return
     immersiveState.value = msg.payload.state
     immersiveProgress.value = msg.payload.progress
   }
@@ -129,6 +174,7 @@ onMounted(() => {
   chrome.runtime.onMessage.addListener(onImmersiveProgress)
   chrome.tabs.query({ active: true, currentWindow: true }).then(([activeTab]) => {
     if (activeTab?.id) {
+      activeTabId = activeTab.id
       chrome.tabs.sendMessage(activeTab.id, { type: 'qt-immersive-status' }).catch(() => {})
     }
   })
@@ -151,18 +197,19 @@ async function startImmersive(all = false) {
 
   const excludeSelectors = immersiveExclude.value.split('\n').map(s => s.trim()).filter(Boolean)
 
-  try {
-    await chrome.tabs.sendMessage(activeTab.id, {
-      type: 'qt-immersive-translate',
-      payload: {
-        api,
-        apiKey: immersiveKeys.value[api],
-        customConfig: isCustom ? immersiveCustom.value : undefined,
-        mode: immersiveMode.value,
-        all,
-        excludeSelectors,
-      },
-    })
+    try {
+      await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'qt-immersive-translate',
+        payload: {
+          api,
+          apiKey: immersiveKeys.value[api],
+          customConfig: isCustom ? immersiveCustom.value : undefined,
+          mode: immersiveMode.value,
+          all,
+          to: immersiveTo.value || toLang.value || 'zh',
+          excludeSelectors,
+        },
+      })
     immersiveState.value = 'translating'
     immersiveProgress.value = { total: 0, done: 0, failed: 0 }
     immersiveError.value = ''
@@ -221,7 +268,10 @@ async function cancelImmersive() {
 
       <template v-if="isWord && dictResult">
         <div class="section">
-          <div class="section-tag tag-green">本地词典</div>
+          <div class="section-head">
+            <div class="section-tag tag-green">本地词典</div>
+            <button class="fav-btn-sm" @click="toggleFav" :title="isFaved ? '取消收藏' : '收藏'">{{ isFaved ? '♥' : '♡' }}</button>
+          </div>
           <div v-if="dictResult.phonetic || dictResult.audio" class="phonetic">
             <span v-if="dictResult.phonetic?.uk" class="phon">英 [{{ dictResult.phonetic.uk }}]</span>
             <span v-if="dictResult.phonetic?.us" class="phon">美 [{{ dictResult.phonetic.us }}]</span>
@@ -248,14 +298,25 @@ async function cancelImmersive() {
 
       <div v-if="result" class="result">
         <div class="result-bar">
-          <span class="tag-blue">{{ getMeta(usedApi).name }}<em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
-          <button class="copy-btn" @click="copyResult">{{ copied ? '✓' : '复制' }}</button>
+          <span class="tag-blue">{{ getMeta(usedApi).name }}<em v-if="fallbackUsed"> · 备用</em><em v-if="detectedSrc"> · {{ detectedSrc }}</em></span>
+          <span class="bar-actions">
+            <button class="copy-btn fav-btn" @click="toggleFav" :title="isFaved ? '取消收藏' : '收藏'">{{ isFaved ? '♥' : '♡' }}</button>
+            <button class="copy-btn" @click="speakResult" title="朗读译文">🔊</button>
+            <button class="copy-btn" @click="copyResult">{{ copied ? '✓' : '复制' }}</button>
+          </span>
         </div>
         <div class="result-text">{{ result }}</div>
       </div>
 
+      <div v-if="aiResult" class="result">
+        <div class="result-bar">
+          <span class="tag-ai">AI 对照 · {{ aiResult.api ? getMeta(aiResult.api).name : 'AI' }}</span>
+        </div>
+        <div class="result-text">{{ aiResult.text }}</div>
+      </div>
+
       <div v-if="error" class="error">
-        {{ error }}
+        <span class="error-msg">{{ error }}</span>
         <button v-if="!error.includes('设置')" class="retry-btn" @click="doTranslate">重试</button>
       </div>
     </div>
@@ -302,16 +363,16 @@ async function cancelImmersive() {
 </template>
 
 <style scoped>
-.app { width: 360px; background: #f0f9ff; color: #0c4a6e; font-family: system-ui, sans-serif; }
+.app { width: 360px; background: var(--qt-bg); color: var(--qt-text); font-family: system-ui, sans-serif; }
 
-.header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: linear-gradient(90deg, rgba(56,189,248,0.1), transparent); border-bottom: 1px solid rgba(56,189,248,0.12); }
+.header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: linear-gradient(90deg, var(--qt-bar), transparent); border-bottom: 1px solid var(--qt-border-light); }
 .logo { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, #38bdf8, #7dd3fc); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff; }
 .title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #0ea5e9; flex: 1; }
-.settings-btn { background: none; border: none; color: #64748b; font-size: 16px; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 2px 4px; border-radius: 4px; }
-.settings-btn:hover { opacity: 1; background: rgba(56,189,248,0.1); }
+.settings-btn { background: none; border: none; color: var(--qt-text-light); font-size: 16px; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 2px 4px; border-radius: 4px; }
+.settings-btn:hover { opacity: 1; background: var(--qt-bar); }
 
-.tabs { display: flex; border-bottom: 1px solid rgba(56,189,248,0.12); }
-.tabs button { flex: 1; padding: 8px 0; background: none; border: none; border-bottom: 2px solid transparent; color: #64748b; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.tabs { display: flex; border-bottom: 1px solid var(--qt-border-light); }
+.tabs button { flex: 1; padding: 8px 0; background: none; border: none; border-bottom: 2px solid transparent; color: var(--qt-text-light); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
 .tabs button.active { color: #0ea5e9; border-bottom-color: #0ea5e9; }
 
 .body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -320,73 +381,80 @@ async function cancelImmersive() {
 .lang-row { display: flex; align-items: center; gap: 6px; }
 .lang-row .sel { flex: 1; }
 
-.sel { padding: 5px 8px; background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 5px; color: #0c4a6e; font-size: 12px; cursor: pointer; outline: none; }
+.sel { padding: 5px 8px; background: var(--qt-card); border: 1px solid var(--qt-border); border-radius: 5px; color: var(--qt-text); font-size: 12px; cursor: pointer; outline: none; }
 .sel:focus { border-color: #38bdf8; }
-.sel option, .sel optgroup { background: #f0f9ff; color: #0c4a6e; }
+.sel option, .sel optgroup { background: var(--qt-bg); color: var(--qt-text); }
 
 .swap { cursor: pointer; font-size: 16px; color: #0ea5e9; opacity: 0.7; user-select: none; transition: opacity 0.15s; }
 .swap:hover { opacity: 1; }
 .swap-disabled { opacity: 0.3; cursor: not-allowed; }
 
-textarea { width: 100%; padding: 8px 10px; background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 6px; color: #0c4a6e; font-size: 13px; line-height: 1.5; resize: vertical; font-family: inherit; outline: none; }
-textarea:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.1); }
-textarea::placeholder { color: #64748b; }
+textarea { width: 100%; padding: 8px 10px; background: var(--qt-card); border: 1px solid var(--qt-border); border-radius: 6px; color: var(--qt-text); font-size: 13px; line-height: 1.5; resize: vertical; font-family: inherit; outline: none; }
+textarea:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px var(--qt-bar); }
+textarea::placeholder { color: var(--qt-text-light); }
 
 .actions { display: flex; gap: 6px; }
 .btn { flex: 1; padding: 7px 0; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-clear { background: rgba(56,189,248,0.08); color: #0ea5e9; }
+.btn-clear { background: var(--qt-bar); color: #0ea5e9; }
 .btn-go { background: linear-gradient(135deg, #0ea5e9, #38bdf8); color: #fff; font-weight: 600; }
 .btn-go:hover:not(:disabled) { box-shadow: 0 0 14px rgba(56,189,248,0.5); }
 
 .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
 
-.section { background: #fff; border: 1px solid rgba(56,189,248,0.2); border-radius: 8px; padding: 10px 12px; }
-.section-tag { font-size: 9px; font-weight: 600; letter-spacing: .5px; padding: 2px 6px; border-radius: 3px; display: inline-block; margin-bottom: 8px; }
-.tag-green { color: #10b981; background: rgba(16,185,129,0.1); }
+.section { background: var(--qt-card); border: 1px solid var(--qt-border); border-radius: 8px; padding: 10px 12px; }
+.section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.section-tag { font-size: 9px; font-weight: 600; letter-spacing: .5px; padding: 2px 6px; border-radius: 3px; display: inline-block; }
+.fav-btn-sm { background: none; border: 1px solid var(--qt-border); border-radius: 3px; color: #ef4444; font-size: 13px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+.fav-btn-sm:hover { background: rgba(239,68,68,0.08); }
+.tag-green { color: #10b981; background: rgba(16,185,129,0.14); }
 .tag-blue { color: #3b82f6; background: rgba(59,130,246,0.1); padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; letter-spacing: .5px; }
+.tag-ai { color: #8b5cf6; background: rgba(139,92,246,0.12); padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; letter-spacing: .5px; }
 
 .phonetic { display: flex; gap: 12px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
-.phon { font-size: 12px; color: #0c4a6e; }
-.audio-btn { padding: 2px 8px; font-size: 10px; border: 1px solid rgba(56,189,248,0.25); background: transparent; color: #0ea5e9; border-radius: 3px; cursor: pointer; transition: all 0.15s; }
-.audio-btn:hover { background: rgba(56,189,248,0.1); }
+.phon { font-size: 12px; color: var(--qt-text); }
+.audio-btn { padding: 2px 8px; font-size: 10px; border: 1px solid var(--qt-border); background: transparent; color: #0ea5e9; border-radius: 3px; cursor: pointer; transition: all 0.15s; }
+.audio-btn:hover { background: var(--qt-bar); }
 .bing-link { font-size: 10px; color: #0ea5e9; text-decoration: none; margin-left: 6px; opacity: .7; transition: opacity .15s; }
 .bing-link:hover { opacity: 1; text-decoration: underline; }
 
 .defs { margin-bottom: 4px; }
 .def-item { font-size: 12px; line-height: 1.5; padding: 1px 0; }
 .pos { color: #0ea5e9; font-weight: 600; margin-right: 4px; }
-.def { color: #334155; }
-.presents { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+.def { color: var(--qt-text-light); }
+.presents { font-size: 11px; color: var(--qt-text-light); margin-bottom: 4px; }
 .sentences { margin-top: 4px; }
 .sent { margin-bottom: 4px; }
-.sent-en { font-size: 11px; color: #334155; line-height: 1.4; }
-.sent-zh { font-size: 11px; color: #94a3b8; line-height: 1.4; font-style: italic; }
+.sent-en { font-size: 11px; color: var(--qt-text-light); line-height: 1.4; }
+.sent-zh { font-size: 11px; color: var(--qt-text-dim); line-height: 1.4; font-style: italic; }
 
 .dict-loading { display: flex; align-items: center; gap: 6px; color: #0ea5e9; font-size: 11px; }
 
-.result { background: #fff; border: 1px solid rgba(56,189,248,0.25); border-radius: 8px; overflow: hidden; }
-.result-bar { padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(56,189,248,0.12); background: rgba(56,189,248,0.04); }
-.copy-btn { padding: 2px 8px; font-size: 10px; border: 1px solid rgba(56,189,248,0.25); background: transparent; color: #0ea5e9; border-radius: 4px; cursor: pointer; }
-.copy-btn:hover { background: rgba(56,189,248,0.1); }
-.result-text { padding: 10px; color: #0c4a6e; line-height: 1.6; max-height: 180px; overflow-y: auto; word-break: break-all; }
+.result { background: var(--qt-card); border: 1px solid var(--qt-border); border-radius: 8px; overflow: hidden; }
+.result-bar { padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--qt-border-light); background: var(--qt-bar); }
+.bar-actions { display: flex; gap: 4px; }
+.fav-btn { color: #ef4444; }
+.copy-btn { padding: 2px 8px; font-size: 10px; border: 1px solid var(--qt-border); background: transparent; color: #0ea5e9; border-radius: 4px; cursor: pointer; }
+.copy-btn:hover { background: var(--qt-bar); }
+.result-text { padding: 10px; color: var(--qt-text); line-height: 1.6; max-height: 180px; overflow-y: auto; word-break: break-all; }
 
-.error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.error { padding: 8px 10px; background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 6px; color: #dc2626; font-size: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.error-msg { flex: 1; min-width: 0; word-break: break-all; line-height: 1.4; }
 .retry-btn { padding: 3px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #dc2626; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
 .retry-btn:hover { background: rgba(239,68,68,0.2); }
 
 /* 全文翻译 */
 .mode-row { display: flex; gap: 6px; }
-.mode-btn { flex: 1; padding: 6px 0; font-size: 11px; border: 1px solid rgba(56,189,248,0.2); background: #fff; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+.mode-btn { flex: 1; padding: 6px 0; font-size: 11px; border: 1px solid var(--qt-border); background: var(--qt-card); color: var(--qt-text-light); border-radius: 6px; cursor: pointer; transition: all 0.15s; font-weight: 500; }
 .mode-btn:hover { border-color: rgba(56,189,248,0.4); color: #0ea5e9; }
-.mode-btn.active { background: rgba(14,165,233,0.1); border-color: #0ea5e9; color: #0ea5e9; font-weight: 600; }
+.mode-btn.active { background: var(--qt-bar); border-color: #0ea5e9; color: #0ea5e9; font-weight: 600; }
 
-.immersive-hint { font-size: 11px; color: #94a3b8; text-align: center; padding: 4px 0; }
+.immersive-hint { font-size: 11px; color: var(--qt-text-dim); text-align: center; padding: 4px 0; }
 
 .immersive-progress { display: flex; flex-direction: column; gap: 6px; }
-.progress-bar { width: 100%; height: 5px; background: rgba(56,189,248,0.12); border-radius: 3px; overflow: hidden; }
+.progress-bar { width: 100%; height: 5px; background: var(--qt-border-light); border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg, #0ea5e9, #38bdf8); border-radius: 3px; transition: width 0.3s ease; }
-.progress-text { font-size: 11px; color: #64748b; text-align: center; }
+.progress-text { font-size: 11px; color: var(--qt-text-light); text-align: center; }
 .fail { color: #ef4444; }
 
 .immersive-err { font-size: 11px; color: #dc2626; text-align: center; padding: 4px 0; }
