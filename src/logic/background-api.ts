@@ -34,7 +34,9 @@ export function invokeLookupDict(payload: DictPayload): Promise<DictResult | nul
     .catch(() => null)
 }
 
-// 通知 background 取消正在进行的翻译（可选，主要用于释放资源）
-export function cancelTranslate(): Promise<void> {
-  return chrome.runtime.sendMessage({ type: 'qt-cancel' }).catch(() => {})
+// AI 对照翻译：与主翻译独立；未配置 Key 或失败时返回 null（UI 不显示）
+export function invokeAiTranslate(payload: { text: string; from: string; to: string }): Promise<TranslateResult | null> {
+  return chrome.runtime.sendMessage({ type: 'qt-ai-translate', payload })
+    .then((res: any) => (res?.result as TranslateResult) || null)
+    .catch(() => null)
 }

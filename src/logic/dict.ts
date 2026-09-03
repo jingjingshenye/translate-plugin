@@ -349,8 +349,14 @@ export async function lookupDict(text: string, signal?: AbortSignal): Promise<Di
   // 1. 先查本地词典（瞬间响应）
   const local = await localDict(text)
   if (local && local.definitions?.length) {
-    // 异步补充在线词典的额外信息（音标、例句、发音）
-    bingDict(text, signal).then(online => {
+    // 合并 Bing 补充数据（音标、例句、发音）后再返回：
+    // 请求在 background 处理，sendResponse 会把当时的结果一次性序列化发走，
+    // fire-and-forget 的补充会随序列化丢失。等待上限 2.5s，超时/失败则只返回本地数据
+    try {
+      const online = await Promise.race([
+        bingDict(text, signal),
+        new Promise<null>(resolve => setTimeout(resolve, 2500)),
+      ])
       if (online) {
         if (online.phonetic) local.phonetic = online.phonetic
         if (online.audio) local.audio = online.audio
@@ -358,7 +364,7 @@ export async function lookupDict(text: string, signal?: AbortSignal): Promise<Di
         if (online.presents?.length) local.presents = online.presents
         if (online.ecs?.length) local.ecs = online.ecs
       }
-    }).catch(() => {})
+    } catch {}
     return local
   }
 

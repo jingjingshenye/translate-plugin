@@ -4,12 +4,14 @@
 export function detectLang(text: string): string {
   const t = text.trim()
   if (!t) return 'en'
-  const zhRatio = (t.match(/[一-鿿]/g) || []).length / t.length
-  if (zhRatio > 0.3) return 'zh'
-  if (/[぀-ゟ゠-ヿ]/.test(t)) return 'ja'
+  // 独占文字系统优先判（无歧义）；日文必含假名，须先于汉字比例判断，
+  // 否则汉字占比高的日文文本会被误判为中文
+  if (/[぀-ヿ]/.test(t)) return 'ja'
   if (/[가-힯]/.test(t)) return 'ko'
   if (/[Ѐ-ӿ]/.test(t)) return 'ru'
   if (/[؀-ۿ]/.test(t)) return 'ar'
+  const zhRatio = (t.match(/[一-鿿]/g) || []).length / t.length
+  if (zhRatio > 0.3) return 'zh'
   return 'en'
 }
 

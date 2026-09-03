@@ -8,7 +8,7 @@ async function getEncKey(): Promise<CryptoKey> {
   if (!subtle) throw new Error('Web Crypto API not available')
   const stored = await chrome.storage.local.get(ENC_KEY_NAME)
   if (stored[ENC_KEY_NAME]) {
-    const raw = Uint8Array.from(atob(stored[ENC_KEY_NAME]), c => c.charCodeAt(0))
+    const raw = Uint8Array.from(atob(stored[ENC_KEY_NAME] as string), c => c.charCodeAt(0))
     return subtle.importKey('raw', raw, 'AES-GCM', true, ['encrypt', 'decrypt'])
   }
   const key = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
