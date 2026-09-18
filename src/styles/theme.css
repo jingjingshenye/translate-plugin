@@ -44,3 +44,14 @@ body {
 
 /* 共享 spinner 动画：popup 和 options 复用，避免重复定义 */
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 细滚动条（扩展自有页面：popup/options，亮暗主题自适应） */
+::-webkit-scrollbar { width: 8px; height: 8px }
+::-webkit-scrollbar-track { background: transparent }
+::-webkit-scrollbar-thumb { background: rgba(14, 165, 233, 0.3); border-radius: 4px }
+::-webkit-scrollbar-thumb:hover { background: rgba(14, 165, 233, 0.55) }
+::-webkit-scrollbar-corner { background: transparent }
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.3) }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(56, 189, 248, 0.5) }
+}
