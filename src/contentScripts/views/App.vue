@@ -463,7 +463,7 @@ onUnmounted(() => {
         <template v-if="isWord && dictResult">
           <div class="qt-dict-head">
             <span class="qt-dict-badge">{{ dictSourceLabel }}</span>
-            <a v-if="hasBingSource" class="qt-bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank" @click.stop>Bing ↗</a>
+            <a v-if="hasBingSource" class="qt-bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank" @click.stop>{{ dictResult.sentences?.length ? '例句 · Bing ↗' : 'Bing ↗' }}</a>
           </div>
           <div v-if="dictResult.phonetic?.uk || dictResult.phonetic?.us || dictResult.audio?.uk || dictResult.audio?.us" class="qt-phonetic">
             <span v-if="dictResult.phonetic?.uk" class="qt-phon-item">英 [{{ dictResult.phonetic.uk }}]</span>
@@ -479,12 +479,6 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-if="dictResult.presents?.length" class="qt-presents">{{ dictResult.presents.join(', ') }}</div>
-          <div v-if="dictResult.sentences?.length" class="qt-sentences">
-            <div v-for="(s, i) in dictResult.sentences.slice(0, 2)" :key="i" class="qt-sent">
-              <div class="qt-sent-en">{{ s.en }}</div>
-              <div class="qt-sent-zh">{{ s.zh }}</div>
-            </div>
-          </div>
           <div class="qt-divider"></div>
         </template>
 
