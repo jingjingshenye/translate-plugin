@@ -42,6 +42,20 @@ let domObserver: MutationObserver | null = null
 let rescanTimer: ReturnType<typeof setTimeout> | null = null
 let emptyTimer: ReturnType<typeof setTimeout> | null = null
 let waitingForContent = false
+const pendingRescanRoots = new Set<Element>()
+let pendingFullScan = false
+const RESCAN_MAX_ROOTS = 40
+
+function noteRescanRoot(el: Element | null): void {
+  if (!el) return
+  // 变更根过多（页面大改版）时退化为整页扫描，避免收集遗漏
+  if (pendingRescanRoots.size >= RESCAN_MAX_ROOTS) {
+    pendingFullScan = true
+    pendingRescanRoots.clear()
+    return
+  }
+  pendingRescanRoots.add(el)
+}
 let lastRescanAt = 0
 const RESCAN_DEBOUNCE_MS = 1200
 const RESCAN_MIN_INTERVAL_MS = 3000
@@ -68,7 +82,16 @@ function checkRoute() {
 }
 window.addEventListener('popstate', checkRoute)
 window.addEventListener('hashchange', checkRoute)
-setInterval(checkRoute, 1000)
+
+// 轮询只在会话进行中有意义（idle 时路由变化无需处理），避免每个 frame 常驻定时器
+let routeTimer: ReturnType<typeof setInterval> | null = null
+function startRouteWatch(): void {
+  if (routeTimer) return
+  routeTimer = setInterval(checkRoute, 1000)
+}
+function stopRouteWatch(): void {
+  if (routeTimer) { clearInterval(routeTimer); routeTimer = null }
+}
 
 // all_frames 注入后每个 frame 都有本 controller：同源 iframe 的内容已由顶层
 // collectTextBlocks 收集（重复翻译会出两份译文），只有跨源 iframe 需要自己翻
@@ -174,6 +197,7 @@ function cleanup() {
   if (rescanTimer) { clearTimeout(rescanTimer); rescanTimer = null }
   if (emptyTimer) { clearTimeout(emptyTimer); emptyTimer = null }
   stopDomObserver()
+  stopRouteWatch()
   observer?.disconnect()
   observer = null
   removeAllTranslations()
@@ -184,6 +208,8 @@ function cleanup() {
   waitingForContent = false
   translateAll = false
   failedIds.clear()
+  pendingRescanRoots.clear()
+  pendingFullScan = false
   showOriginal = true
   blockStates.clear()
   blockIndex.clear()
@@ -231,17 +257,20 @@ function startDomObserver() {
             continue
           }
           meaningful = true
+          noteRescanRoot(n.nodeType === Node.ELEMENT_NODE ? (n as Element) : (n as Text).parentElement)
           break
         }
       } else if (m.type === 'attributes') {
         // SSR 页面常是"内容早已在 DOM、靠 class/style 翻转可见性"（水合），
         // 只监听 childList 会漏掉这种可见性变化
         if (!(m.target instanceof Element) || m.target.closest(OWN_NODES_SELECTOR)) continue
+        noteRescanRoot(m.target)
         meaningful = true
         break
       } else if (m.type === 'characterData') {
         const p = m.target.parentElement
         if (!p || p.closest(OWN_NODES_SELECTOR)) continue
+        noteRescanRoot(p)
         meaningful = true
         break
       }
@@ -278,8 +307,25 @@ function rescanNewBlocks() {
   lastRescanAt = Date.now()
   if (state === 'idle' || !domObserver) return
 
+  const runScan = () => {
+    if (state === 'idle' || !domObserver) return
+    applyRescan()
+  }
+  // 避开页面自身的任务高峰
+  if ('requestIdleCallback' in window) requestIdleCallback(runScan, { timeout: 1500 })
+  else runScan()
+}
+
+function applyRescan() {
+  if (state === 'idle') return
+  // 增量优先：只扫本轮变更的子树；根过多/全页级变化时退化为整页扫描
+  const roots = pendingFullScan ? undefined : [...pendingRescanRoots]
+  pendingRescanRoots.clear()
+  pendingFullScan = false
+  if (!roots || roots.length === 0) return
+
   // walker 的 shouldSkip 会跳过已带 OBSERVE/SOURCE 标记的旧块，这里只会拿到新内容
-  const blocks = collectTextBlocks(excludeSelectors)
+  const blocks = collectTextBlocks(excludeSelectors, roots)
   if (blocks.length === 0) return
 
   if (waitingForContent) {
@@ -445,6 +491,7 @@ async function handleTranslate(payload: ImmersivePayload) {
   // 先于收集启动：触发时页面还没有内容（SPA 流式水合）时靠它等待首波内容；
   // 正常会话中则负责翻译开始后持续补翻新增内容
   startDomObserver()
+  startRouteWatch()
   reportProgress()
 
   allBlocks = collectTextBlocks(excludeSelectors)

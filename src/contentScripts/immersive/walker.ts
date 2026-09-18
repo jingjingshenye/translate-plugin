@@ -222,7 +222,7 @@ function pushBlocks(groups: Map<Element, GroupItem[]>, seen: Set<string>, blocks
   }
 }
 
-export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBlock[] {
+export function collectTextBlocks(userExcludeSelectors: string[] = [], limitRoots?: Element[]): TextBlock[] {
   ancestorCache = new WeakMap()
   visibleCache = new WeakMap()
   foundShadowRoots = []
@@ -230,6 +230,12 @@ export function collectTextBlocks(userExcludeSelectors: string[] = []): TextBloc
 
   const blocks: TextBlock[] = []
   const seen = new Set<string>()
+
+  // 增量模式：只扫给定子树（补扫用），不做 shadow/iframe 全局发现，开销与变更量成正比
+  if (limitRoots && limitRoots.length > 0) {
+    for (const root of limitRoots) pushBlocks(collectGroups(root), seen, blocks)
+    return blocks
+  }
 
   pushBlocks(collectGroups(document.body), seen, blocks)
 
