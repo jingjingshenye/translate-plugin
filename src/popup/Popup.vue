@@ -157,7 +157,7 @@ const autoSiteOrigin = ref('')
 const autoSiteBusy = ref(false)
 
 const immersiveState = ref<ImmersiveState>('idle')
-const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
+const immersiveProgress = ref({ total: 0, done: 0, failed: 0, fallback: 0 })
 const immersiveHint = ref('')
 const immersiveError = ref('')
 let activeTabId = 0
@@ -227,7 +227,7 @@ async function startImmersive(all = false) {
         },
       })
     immersiveState.value = 'translating'
-    immersiveProgress.value = { total: 0, done: 0, failed: 0 }
+    immersiveProgress.value = { total: 0, done: 0, failed: 0, fallback: 0 }
     immersiveError.value = ''
     immersiveHint.value = ''
   } catch {
@@ -256,7 +256,8 @@ async function toggleAutoSite() {
     if (autoSite.value) {
       map[autoSiteOrigin.value] = true
       await chrome.storage.local.set({ qt_auto_sites: map })
-      await startImmersive(false)
+      // 与重载后的自动触发行为一致：翻译全部
+      await startImmersive(true)
     } else {
       delete map[autoSiteOrigin.value]
       await chrome.storage.local.set({ qt_auto_sites: map })
@@ -393,7 +394,7 @@ async function toggleAutoSite() {
 
       <div v-if="immersiveState === 'translating'" class="immersive-progress">
         <div class="progress-bar"><div class="progress-fill" :style="{ width: immersivePercent + '%' }"></div></div>
-        <div class="progress-text">{{ immersiveProgress.done }} / {{ immersiveProgress.total }}<span v-if="immersiveProgress.failed > 0" class="fail"> · {{ immersiveProgress.failed }}失败</span></div>
+        <div class="progress-text">{{ immersiveProgress.done }} / {{ immersiveProgress.total }}<span v-if="immersiveProgress.failed > 0" class="fail"> · {{ immersiveProgress.failed }}失败</span><span v-if="immersiveProgress.fallback > 0"> · 备用{{ immersiveProgress.fallback }}段</span></div>
       </div>
 
       <div v-if="immersiveHint" class="immersive-hint">{{ immersiveHint }}</div>

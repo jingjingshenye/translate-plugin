@@ -49,18 +49,26 @@ async function buildImmersivePayload(toggle: boolean) {
   ])
   const keys = await decryptKeys((stored.qt_api_keys as Record<string, string>) || {})
   const rawApi = (stored.qt_immersive_api as string) || (stored.qt_api as string) || ''
-  const api = isKnownApi(rawApi) ? rawApi : 'microsoft'
-  const isCustom = api === 'custom'
-  const customConfig = isCustom ? stored.qt_custom_api as { url: string; key?: string; model?: string; prompt?: string } | undefined : undefined
-  if (!isCustom && getMeta(api).needKey && !keys[api]) {
-    throw new Error(`${getMeta(api).name} 需要先在设置中配置 API Key`)
+  let api = isKnownApi(rawApi) ? rawApi : 'microsoft'
+  let customConfig = api === 'custom' ? stored.qt_custom_api as { url: string; key?: string; model?: string; prompt?: string } | undefined : undefined
+  let apiKey: string | undefined = keys[api]
+  // Key/URL 缺失时降级到默认免费引擎：这些入口没有弹窗 UI，静默失败等于功能消失
+  if (api === 'custom' && !customConfig?.url) {
+    console.warn('[QT] 自定义 API 未配置 URL，降级到 microsoft')
+    api = 'microsoft'
+    customConfig = undefined
+    apiKey = undefined
+  } else if (api !== 'custom' && getMeta(api).needKey && !apiKey) {
+    console.warn(`[QT] ${getMeta(api).name} 未配置 Key，降级到 microsoft`)
+    api = 'microsoft'
+    apiKey = undefined
   }
   const exclude = typeof stored.qt_immersive_exclude === 'string'
     ? stored.qt_immersive_exclude.split('\n').map(s => s.trim()).filter(Boolean)
     : []
   return {
     api,
-    apiKey: keys[api],
+    apiKey,
     customConfig,
     mode: (stored.qt_immersive_mode as 'bilingual' | 'translated-only') || 'bilingual',
     all: true,
@@ -75,9 +83,15 @@ async function startImmersive(tabId: number, toggle: boolean) {
   try {
     const payload = await buildImmersivePayload(toggle)
     await chrome.tabs.sendMessage(tabId, { type: 'qt-immersive-translate', payload })
+    chrome.action?.setBadgeText({ text: '', tabId }).catch(() => {})
   } catch (e) {
-    // 内容脚本未注入（chrome:// 等）或 Key 缺失：控制台可查，不打断用户
+    // 不可注入页面（chrome:// 等）或组装失败：图标角标提示 3 秒，不再完全静默
     console.warn('[QT] immersive trigger failed:', e instanceof Error ? e.message : e)
+    try {
+      await chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })
+      await chrome.action.setBadgeText({ text: '!', tabId })
+      setTimeout(() => { chrome.action.setBadgeText({ text: '', tabId }).catch(() => {}) }, 3000)
+    } catch {}
   }
 }
 

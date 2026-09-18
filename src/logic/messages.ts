@@ -10,7 +10,7 @@ export interface CustomApiConfig {
 
 export interface ImmersiveProgressPayload {
   state: 'idle' | 'translating' | 'done'
-  progress: { total: number; done: number; failed: number }
+  progress: { total: number; done: number; failed: number; fallback: number }
   showOriginal: boolean
   // 等待页面内容 / 未找到可翻译内容 / 语言相同无需翻译 等人读提示；无提示时省略
   message?: string

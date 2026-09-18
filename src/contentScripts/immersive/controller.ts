@@ -14,7 +14,7 @@ interface ImmersivePayload {
 
 let state: 'idle' | 'translating' | 'done' = 'idle'
 let mode: ImmersiveMode = 'bilingual'
-let progress = { total: 0, done: 0, failed: 0 }
+let progress = { total: 0, done: 0, failed: 0, fallback: 0 }
 let abortController: AbortController | null = null
 let panelEl: HTMLElement | null = null
 let apiNameCache = ''
@@ -131,7 +131,7 @@ function renderPanel() {
     const toggleText = showOriginal ? '隐藏原文' : '显示原文'
     panelEl.innerHTML = `
       <div class="qt-ctrl-row"><span class="qt-ctrl-title">沉浸式翻译</span><span class="qt-ctrl-api">${safeName}</span></div>
-      <div class="qt-ctrl-info">${progress.done}段${progress.failed > 0 ? ` <span class="qt-ctrl-fail">${progress.failed}失败</span>` : ''}</div>
+      <div class="qt-ctrl-info">${progress.done}段${progress.failed > 0 ? ` <span class="qt-ctrl-fail">${progress.failed}失败</span>` : ''}${progress.fallback > 0 ? ` · 备用${progress.fallback}` : ''}</div>
       <div class="qt-ctrl-btns">
         <button class="qt-ctrl-btn${mode === 'bilingual' ? ' active' : ''}" data-action="mode" data-mode="bilingual">双语</button>
         <button class="qt-ctrl-btn${mode === 'translated-only' ? ' active' : ''}" data-action="mode" data-mode="translated-only">仅译文</button>
@@ -179,7 +179,7 @@ function cleanup() {
   removeAllTranslations()
   unmarkAllObserved()
   state = 'idle'
-  progress = { total: 0, done: 0, failed: 0 }
+  progress = { total: 0, done: 0, failed: 0, fallback: 0 }
   progressMessage = ''
   waitingForContent = false
   translateAll = false
@@ -195,7 +195,7 @@ function cleanup() {
 
 function exitIdle(message = '') {
   state = 'idle'
-  progress = { total: 0, done: 0, failed: 0 }
+  progress = { total: 0, done: 0, failed: 0, fallback: 0 }
   progressMessage = message
   removePanel()
   unmarkAllObserved()
@@ -373,6 +373,7 @@ async function translateBatch(batch: TextBlock[]) {
       if (result?.text) {
         injectTranslation(block.id, result.text, mode, block.isCode)
         failedIds.delete(block.id)
+        if (result.viaFallback) progress.fallback++
       } else {
         progress.failed++
         failedIds.add(block.id)
@@ -433,7 +434,7 @@ async function handleTranslate(payload: ImmersivePayload) {
   setTranslationStyle(payload.style)
   state = 'translating'
   showOriginal = true
-  progress = { total: 0, done: 0, failed: 0 }
+  progress = { total: 0, done: 0, failed: 0, fallback: 0 }
   apiNameCache = getMeta(payload.api).name
   apiConfig = { api: payload.api, apiKey: payload.apiKey, customConfig: payload.customConfig }
   targetLang = payload.to || 'zh'
@@ -469,7 +470,7 @@ async function handleTranslate(payload: ImmersivePayload) {
     return
   }
 
-  progress = { total: allBlocks.length, done: 0, failed: 0 }
+  progress = { total: allBlocks.length, done: 0, failed: 0, fallback: 0 }
   blockIndex.clear()
   for (const block of allBlocks) {
     markSourceBlock(block.id, block.element)
