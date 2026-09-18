@@ -24,11 +24,12 @@ export type BackgroundMessage =
   | { type: 'qt-ai-translate'; payload: { text: string; from: string; to: string } }
   | { type: 'qt-test-api'; payload: { api: string; apiKey?: string; customConfig?: CustomApiConfig } }
   | { type: 'qt-cancel'; payload?: { sessionId?: string } }
+  | { type: 'qt-immersive-auto' }
 
 // background / popup → 指定 tab（chrome.tabs.sendMessage）
 export type TabMessage =
   | { type: 'translate-text'; text: string }
-  | { type: 'qt-immersive-translate'; payload: { api: string; apiKey?: string; customConfig?: CustomApiConfig; mode: 'bilingual' | 'translated-only'; all?: boolean; to?: string; excludeSelectors?: string[]; toggle?: boolean } }
+  | { type: 'qt-immersive-translate'; payload: { api: string; apiKey?: string; customConfig?: CustomApiConfig; mode: 'bilingual' | 'translated-only'; all?: boolean; to?: string; excludeSelectors?: string[]; toggle?: boolean; style?: 'underline' | 'dashed' | 'quote' | 'none' } }
   | { type: 'qt-immersive-cancel' }
   | { type: 'qt-immersive-status' }
 

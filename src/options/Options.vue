@@ -19,6 +19,10 @@ const aiCompare = useStorage<string>('qt_ai_compare', 'auto')
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
 const fallbackDisabled = useStorage<string[]>('qt_fallback_disabled', [])
+const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
+const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
+const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
+const hoverTranslate = useStorage<'click' | 'hover'>('qt_hover_translate', 'click')
 
 function isFallbackOn(id: string) { return !fallbackList().includes(id) }
 function fallbackList(): string[] {
@@ -216,6 +220,16 @@ function download(content: string, name: string, type: string) {
               {{ l.label }}
             </label>
           </div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--qt-text);cursor:pointer;">
+              <input type="checkbox" v-model="selectionAuto" style="accent-color:#0ea5e9;" />
+              划选后自动弹出译文（免点击翻译图标）
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--qt-text);cursor:pointer;">
+              <input type="checkbox" v-model="autoSpeak" style="accent-color:#0ea5e9;" />
+              翻译完成后自动朗读译文
+            </label>
+          </div>
         </section>
 
         <section class="card">
@@ -321,7 +335,7 @@ function download(content: string, name: string, type: string) {
       <template v-if="tab === 'immersive'">
         <section class="card">
           <h2>沉浸式翻译设置</h2>
-          <p class="hint" style="margin-bottom:14px">整页翻译，支持双语对照。在任意网页点击右下角浮动按钮即可翻译。</p>
+          <p class="hint" style="margin-bottom:14px">整页翻译：点击插件图标 → 「全文翻译」tab 触发；也可用快捷键 Alt+Shift+T 或右键菜单。页面延迟渲染时会自动等待内容出现，滚动与路由变化自动补翻。</p>
           <div class="row">
             <label>翻译引擎</label>
             <select v-model="immersiveApi">
@@ -337,6 +351,22 @@ function download(content: string, name: string, type: string) {
             <select v-model="immersiveMode">
               <option value="bilingual">双语对照（原文+译文）</option>
               <option value="translated-only">仅显示译文</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>双语样式</label>
+            <select v-model="immersiveStyle">
+              <option value="underline">下划线（默认）</option>
+              <option value="dashed">虚线标记</option>
+              <option value="quote">引用块</option>
+              <option value="none">无样式纯文本</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>悬停强制翻译</label>
+            <select v-model="hoverTranslate">
+              <option value="click">Alt + 悬停后点击翻译（默认）</option>
+              <option value="hover">Alt + 悬停 0.5 秒自动翻译</option>
             </select>
           </div>
           <div class="row">

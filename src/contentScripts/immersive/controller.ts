@@ -1,5 +1,5 @@
 import { collectTextBlocks, collectForceBlock, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
-import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal } from './injector'
+import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal, setTranslationStyle } from './injector'
 import { getMeta } from '~/logic/translators-meta'
 import { detectPageLang } from '~/logic/lang-utils'
 
@@ -9,6 +9,7 @@ interface ImmersivePayload {
   api: string; apiKey?: string; customConfig?: any
   mode: ImmersiveMode; all?: boolean; to?: string
   excludeSelectors?: string[]; toggle?: boolean
+  style?: 'underline' | 'dashed' | 'quote' | 'none'
 }
 
 let state: 'idle' | 'translating' | 'done' = 'idle'
@@ -77,6 +78,14 @@ const sameOriginTop = (() => {
 })()
 if (!(isSubFrame && sameOriginTop)) {
   initMessageListeners()
+  // 自动翻译本站：origin 在名单中时，页面加载即自动开始（payload 由 background 组装）
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    chrome.storage.local.get('qt_auto_sites').then(({ qt_auto_sites: sites }) => {
+      if (sites && typeof sites === 'object' && (sites as Record<string, unknown>)[location.origin]) {
+        chrome.runtime.sendMessage({ type: 'qt-immersive-auto' }).catch(() => {})
+      }
+    }).catch(() => {})
+  }
 }
 
 function esc(s: string): string {
@@ -422,6 +431,7 @@ async function handleTranslate(payload: ImmersivePayload) {
   lastPayload = payload
   mode = payload.mode
   translateAll = !!payload.all
+  setTranslationStyle(payload.style)
   state = 'translating'
   showOriginal = true
   progress = { total: 0, done: 0, failed: 0 }
@@ -505,14 +515,18 @@ function initMessageListeners() {
 
 // ============================================
 // 强制翻译：按住 Alt 悬停高亮块级元素，Alt+点击绕过一切排除规则翻译该元素。
+// 悬停即译模式（qt_hover_translate='hover'）下悬停 500ms 自动翻译。
 // 排除规则误杀内容时的逃生通道（对标沉浸式翻译的悬停翻译）
 // ============================================
 const FORCE_ATTR = 'data-qt-force-hover'
 let altDown = false
 let forceEl: Element | null = null
+let hoverMode: 'click' | 'hover' = 'click'
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
 function clearForceHighlight() {
   if (forceEl) { forceEl.removeAttribute(FORCE_ATTR); forceEl = null }
+  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
 }
 
 function onMouseMoveForce(e: MouseEvent) {
@@ -520,7 +534,17 @@ function onMouseMoveForce(e: MouseEvent) {
   const hit = document.elementFromPoint(e.clientX, e.clientY)
   const el = hit?.closest?.('p,h1,h2,h3,h4,h5,h6,li,dd,dt,td,th,blockquote,figcaption,summary,pre,section,article,div,span,a') as Element | null
   if (!el || el.closest(OWN_NODES_SELECTOR)) { if (forceEl) clearForceHighlight(); return }
-  if (el !== forceEl) { clearForceHighlight(); forceEl = el; el.setAttribute(FORCE_ATTR, '') }
+  if (el !== forceEl) {
+    clearForceHighlight()
+    forceEl = el
+    el.setAttribute(FORCE_ATTR, '')
+    if (hoverMode === 'hover') {
+      hoverTimer = setTimeout(() => {
+        hoverTimer = null
+        if (altDown && forceEl === el) forceTranslateElement(el)
+      }, 500)
+    }
+  }
 }
 
 async function onAltClickForce(e: MouseEvent) {
@@ -529,6 +553,10 @@ async function onAltClickForce(e: MouseEvent) {
   if (el.closest('[data-qt],[data-qt-immersive]')) return
   e.preventDefault()
   e.stopPropagation()
+  forceTranslateElement(el)
+}
+
+async function forceTranslateElement(el: Element) {
   clearForceHighlight()
   const block = collectForceBlock(el)
   if (!block) return
@@ -571,7 +599,14 @@ function showForceError(el: Element, message: string) {
 function onKeyForce(e: KeyboardEvent, down: boolean) {
   if (e.key !== 'Alt') return
   altDown = down
-  if (!down) clearForceHighlight()
+  if (down) {
+    // 悬停模式设置可能中途修改，按下时读取最新值
+    chrome.storage.local.get('qt_hover_translate').then(v => {
+      hoverMode = v.qt_hover_translate === 'hover' ? 'hover' : 'click'
+    }).catch(() => {})
+  } else {
+    clearForceHighlight()
+  }
 }
 window.addEventListener('mousemove', onMouseMoveForce, true)
 window.addEventListener('click', onAltClickForce, true)

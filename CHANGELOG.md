@@ -1,10 +1,17 @@
 # Changelog
 
-## 1.4.0
+## 1.5.0
 
 ### 修复
 - **Bing 词典在 production 从未生效**：bingDict 使用 DOMParser，而 MV3 service worker 无此 API（实测 `typeof DOMParser === 'undefined'`），ReferenceError 被静默吞掉导致 Bing 音标/例句/发音数据一直为空。现按需创建 offscreen document（`chrome.offscreen`，DOM_PARSER reason）完成 HTML 解析，管线经消息往返验证打通
 - AI 翻译引擎（OpenAI 兼容/Gemini/Claude/DeepL）补 HTTP 状态检查：此前 401/429 直接变成笼统的"解析失败"；现在错误信息带真实状态码与 body 详情，429 也纳入退避重试；Claude max_tokens 1024→4096（长文本不再截断）
+
+### 功能
+- 划选即译：新增「划选后自动弹出译文」模式（设置 → 划词行为），免点击直接出结果
+- 双语样式：下划线/虚线/引用块/无样式四种译文样式（弹窗与设置页可选，随会话下发）
+- 自动翻译本站：弹窗一键开关（per-origin 记忆），名单内站点打开页面即自动翻译；关闭即取消当前会话
+- 悬停即译：Alt+悬停 0.5 秒自动翻译，可在点击/悬停两种模式间切换（设置 → 沉浸式翻译）
+- 查词自动朗读：翻译完成后自动朗读译文（设置 → 划词行为）
 
 ### 可靠性
 - 免费引擎限流与 429 退避：同引擎请求强制最小间隔（350ms）防打爆免费端点；命中 429 时按 Retry-After / 指数退避自动重试（最多 2 次），替代直接计失败

@@ -144,11 +144,17 @@ watch(currentApi, (v) => { if (v && !isKnownApi(v)) currentApi.value = FREE_META
 // ========== 全文翻译 ==========
 const immersiveApi = useStorage<string>('qt_immersive_api', '')
 const immersiveMode = useStorage<ImmersiveMode>('qt_immersive_mode', 'bilingual')
+const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
 const immersiveTo = useStorage<string>('qt_immersive_to', '') // 空 = 跟随划词目标语言
 const immersiveKeys = useEncryptedKeys('qt_api_keys')
 const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 const history = useHistory()
+
+// 自动翻译本站（per-origin 记忆，站点名单存 qt_auto_sites）
+const autoSite = ref(false)
+const autoSiteOrigin = ref('')
+const autoSiteBusy = ref(false)
 
 const immersiveState = ref<ImmersiveState>('idle')
 const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
@@ -178,6 +184,13 @@ onMounted(() => {
     if (activeTab?.id) {
       activeTabId = activeTab.id
       chrome.tabs.sendMessage(activeTab.id, { type: 'qt-immersive-status' }).catch(() => {})
+      // 本站自动翻译开关状态（仅 http/https 页面展示）
+      if (activeTab.url && /^https?:\/\//.test(activeTab.url)) {
+        autoSiteOrigin.value = new URL(activeTab.url).origin
+        chrome.storage.local.get('qt_auto_sites').then(({ qt_auto_sites: sites }) => {
+          autoSite.value = !!(sites && typeof sites === 'object' && (sites as Record<string, unknown>)[autoSiteOrigin.value])
+        }).catch(() => {})
+      }
     }
   })
 })
@@ -210,6 +223,7 @@ async function startImmersive(all = false) {
           all,
           to: immersiveTo.value || toLang.value || 'zh',
           excludeSelectors,
+          style: immersiveStyle.value,
         },
       })
     immersiveState.value = 'translating'
@@ -230,6 +244,27 @@ async function cancelImmersive() {
   immersiveState.value = 'idle'
   immersiveError.value = ''
   immersiveHint.value = ''
+}
+
+// 本站自动翻译开关：写入站点名单；开启时立即翻译一次，关闭时取消当前会话
+async function toggleAutoSite() {
+  if (!autoSiteOrigin.value || autoSiteBusy.value) return
+  autoSiteBusy.value = true
+  try {
+    const { qt_auto_sites: sites } = await chrome.storage.local.get('qt_auto_sites')
+    const map = (sites && typeof sites === 'object' ? sites : {}) as Record<string, boolean>
+    if (autoSite.value) {
+      map[autoSiteOrigin.value] = true
+      await chrome.storage.local.set({ qt_auto_sites: map })
+      await startImmersive(false)
+    } else {
+      delete map[autoSiteOrigin.value]
+      await chrome.storage.local.set({ qt_auto_sites: map })
+      await cancelImmersive()
+    }
+  } finally {
+    autoSiteBusy.value = false
+  }
 }
 </script>
 
@@ -339,6 +374,18 @@ async function cancelImmersive() {
         <button :class="['mode-btn', { active: immersiveMode === 'bilingual' }]" @click="immersiveMode = 'bilingual'">双语对照</button>
         <button :class="['mode-btn', { active: immersiveMode === 'translated-only' }]" @click="immersiveMode = 'translated-only'">仅译文</button>
       </div>
+
+      <select v-model="immersiveStyle" class="sel" title="译文样式">
+        <option value="underline">译文样式：下划线（默认）</option>
+        <option value="dashed">译文样式：虚线</option>
+        <option value="quote">译文样式：引用块</option>
+        <option value="none">译文样式：无样式</option>
+      </select>
+
+      <label v-if="autoSiteOrigin" class="auto-site" :class="{ busy: autoSiteBusy }">
+        <input type="checkbox" v-model="autoSite" @change="toggleAutoSite" />
+        <span>此站点自动翻译（{{ autoSiteOrigin.replace(/^https?:\/\//, '') }}）</span>
+      </label>
 
       <div class="immersive-hint">
         翻译可视区域，滚动页面时自动翻译新内容。
@@ -456,6 +503,10 @@ textarea::placeholder { color: var(--qt-text-light); }
 .mode-btn.active { background: var(--qt-bar); border-color: #0ea5e9; color: #0ea5e9; font-weight: 600; }
 
 .immersive-hint { font-size: 11px; color: var(--qt-text-dim); text-align: center; padding: 4px 0; }
+.auto-site { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--qt-text); cursor: pointer; padding: 2px 0; opacity: .9 }
+.auto-site input { accent-color: #0ea5e9; margin: 0 }
+.auto-site.busy { opacity: .5; pointer-events: none }
+.auto-site span { word-break: break-all; }
 
 .immersive-progress { display: flex; flex-direction: column; gap: 6px; }
 .progress-bar { width: 100%; height: 5px; background: var(--qt-border-light); border-radius: 3px; overflow: hidden; }

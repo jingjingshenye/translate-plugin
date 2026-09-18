@@ -45,7 +45,7 @@ chrome.commands?.onCommand.addListener((command) => {
 async function buildImmersivePayload(toggle: boolean) {
   const stored = await chrome.storage.local.get([
     'qt_immersive_api', 'qt_api', 'qt_api_keys', 'qt_custom_api',
-    'qt_immersive_mode', 'qt_immersive_to', 'qt_to', 'qt_immersive_exclude',
+    'qt_immersive_mode', 'qt_immersive_to', 'qt_to', 'qt_immersive_exclude', 'qt_immersive_style',
   ])
   const keys = await decryptKeys((stored.qt_api_keys as Record<string, string>) || {})
   const rawApi = (stored.qt_immersive_api as string) || (stored.qt_api as string) || ''
@@ -66,6 +66,7 @@ async function buildImmersivePayload(toggle: boolean) {
     all: true,
     to: (stored.qt_immersive_to as string) || (stored.qt_to as string) || 'zh',
     excludeSelectors: exclude,
+    style: (stored.qt_immersive_style as 'underline' | 'dashed' | 'quote' | 'none') || 'underline',
     toggle,
   }
 }
@@ -168,6 +169,12 @@ chrome.runtime.onMessage.addListener((msg: BackgroundMessage, _sender, sendRespo
       .then(result => sendResponse({ ok: true, text: result.text }))
       .catch((err: Error) => sendResponse({ ok: false, error: err?.message || 'connection failed' }))
     return true
+  }
+  if (msg.type === 'qt-immersive-auto') {
+    // 自动翻译本站：content script 页面加载时发起，payload 组装后回送原 tab
+    if (_sender.tab?.id) startImmersive(_sender.tab.id, false)
+    sendResponse({})
+    return false
   }
   if (msg.type === 'qt-cancel') {
     abortSession(msg.payload?.sessionId)

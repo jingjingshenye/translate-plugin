@@ -2,6 +2,16 @@ const TRANSLATED_ATTR = 'data-qt-immersive-translated'
 const SOURCE_ATTR = 'data-qt-immersive-source'
 const BLOCK_ID_ATTR = 'data-qt-block-id'
 
+// 译文双语样式：underline（默认蓝线）/ dashed / quote / none，由会话 payload 下发
+export type TransStyle = 'underline' | 'dashed' | 'quote' | 'none'
+let transStyle: TransStyle = 'underline'
+
+export function setTranslationStyle(style?: string): void {
+  if (style === 'dashed' || style === 'quote' || style === 'none' || style === 'underline') {
+    transStyle = style
+  }
+}
+
 const elementMap = new Map<number, Element>()
 const markerMap = new Map<number, Element>()
 
@@ -28,6 +38,7 @@ export function injectTranslation(blockId: number, translatedText: string, mode:
   transEl.setAttribute(TRANSLATED_ATTR, '')
   transEl.setAttribute(BLOCK_ID_ATTR, String(blockId))
   transEl.className = useInline ? 'qt-immersive-trans qt-immersive-trans-code' : 'qt-immersive-trans'
+  if (transStyle !== 'underline') transEl.classList.add(`qt-style-${transStyle}`)
   transEl.textContent = translatedText
 
   if (useInline) {

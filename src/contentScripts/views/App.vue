@@ -43,6 +43,10 @@ const aiResult = ref<{ text: string; api?: string } | null>(null)
 const showLangMenu = ref(false)
 const transFrom = ref('auto')
 const transTo = ref('zh')
+// 划选后免点击直接出译文（对标沙拉查词/沉浸式的划选即译交互）
+const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
+// 查词/翻译完成后自动朗读
+const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
 
 // 界面展示用的语言名；划词语言选择器当前只开放这几种
 const langMap: Record<string, string> = {
@@ -125,6 +129,22 @@ function findRawInputElement(event: MouseEvent): HTMLInputElement | HTMLTextArea
   return null
 }
 
+// 选区就绪后的统一出口：自动模式下直接弹出译文，否则显示翻译 icon
+function presentSelection(hit: { text: string; rect: DOMRect }) {
+  if (skipLangs.value.includes(detectLang(hit.text))) return
+  selectionRect = hit.rect
+  sourceText.value = hit.text
+  if (selectionAuto.value) {
+    popupPos.value = calculatePopupIndex()
+    doTranslate(hit.text)
+  } else {
+    iconPos.value = {
+      x: Math.min(hit.rect.right, window.innerWidth - ICON_SIZE),
+      y: Math.min(hit.rect.bottom, window.innerHeight - ICON_SIZE),
+    }
+  }
+}
+
 function onMouseUp(event: MouseEvent) {
   if (isOpen.value) return
   if (event.button !== 0) return
@@ -134,14 +154,7 @@ function onMouseUp(event: MouseEvent) {
   setTimeout(() => {
     const hit = getInputSelection(inputElement) || getComposedSelection()
     if (!hit) return
-    if (skipLangs.value.includes(detectLang(hit.text))) return
-
-    selectionRect = hit.rect
-    sourceText.value = hit.text
-    iconPos.value = {
-      x: Math.min(hit.rect.right, window.innerWidth - ICON_SIZE),
-      y: Math.min(hit.rect.bottom, window.innerHeight - ICON_SIZE),
-    }
+    presentSelection(hit)
   }, MOUSEUP_DELAY)
 }
 
@@ -160,14 +173,7 @@ function onSelectionChange() {
     if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
     const hit = getComposedSelection()
     if (!hit) return
-    if (skipLangs.value.includes(detectLang(hit.text))) return
-
-    selectionRect = hit.rect
-    sourceText.value = hit.text
-    iconPos.value = {
-      x: Math.min(hit.rect.right, window.innerWidth - ICON_SIZE),
-      y: Math.min(hit.rect.bottom, window.innerHeight - ICON_SIZE),
-    }
+    presentSelection(hit)
   }, 300)
 }
 
@@ -324,6 +330,7 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
       usedApi.value = result.api || currentApi.value
       fallbackUsed.value = !!result.viaFallback
       history.add({ text, translation: result.text, api: usedApi.value, srcLang: result.srcLang })
+      if (autoSpeak.value) speak(result.text, target)
     })
     .catch((e) => {
       if (myId !== reqId) return
