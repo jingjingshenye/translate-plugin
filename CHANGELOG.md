@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.4.0
+
+### 修复
+- **Bing 词典在 production 从未生效**：bingDict 使用 DOMParser，而 MV3 service worker 无此 API（实测 `typeof DOMParser === 'undefined'`），ReferenceError 被静默吞掉导致 Bing 音标/例句/发音数据一直为空。现按需创建 offscreen document（`chrome.offscreen`，DOM_PARSER reason）完成 HTML 解析，管线经消息往返验证打通
+- AI 翻译引擎（OpenAI 兼容/Gemini/Claude/DeepL）补 HTTP 状态检查：此前 401/429 直接变成笼统的"解析失败"；现在错误信息带真实状态码与 body 详情，429 也纳入退避重试；Claude max_tokens 1024→4096（长文本不再截断）
+
+### 可靠性
+- 免费引擎限流与 429 退避：同引擎请求强制最小间隔（350ms）防打爆免费端点；命中 429 时按 Retry-After / 指数退避自动重试（最多 2 次），替代直接计失败
+- 失败段一键重试：翻译完成后面板出现「重试N失败」按钮，把失败段重新入队再翻
+- 页面语言检测升级：优先 chrome.i18n 的 CLD 检测（更准的 zh/ja/en 区分），不可用时回退字符启发式
+
+### 功能
+- 快捷键全文翻译：Alt+Shift+T 触发/取消（可在 chrome://extensions/shortcuts 改键）；右键菜单新增「全文翻译整个页面」——两者均由 background 直接从存储组装引擎配置，无需打开弹窗
+- SPA 路由自动续翻：翻译会话进行中发生 SPA 路由切换，自动用同一配置重新收集翻译新页面内容（此前只会清除）
+- 悬停强制翻译：按住 Alt 悬停高亮块级元素，Alt+点击绕过一切排除规则翻译该元素（排除规则误杀内容的逃生通道，对标沉浸式翻译的悬停翻译）
+
+### 性能
+- content script 按需拆包：bootstrap（触发逻辑+全文翻译控制器）从 105KB 降到 29KB（-72%），划词 UI（Vue）分包在首次使用时经 web_accessible_resources 动态加载，所有页面/iframe 的脚本解析开销大幅下降
+
+### 工程
+- 排除策略核心 isIdentifierLike 提取到 logic/identifier.ts 并新增 34 个单测（含 Makefile/Dockerfile 等边界）
+- useEncryptedKeys 同 key 单例化：popup 中 apiKeys/immersiveKeys 双实例曾存在防抖写竞态
+- 清理：腾讯云签名 fetch 移除无效 Host 头；App.vue 移除未开放语言的死映射；历史导出复用防御性取值；设置页同步最新的内置排除规则与使用说明；Key 解密失败增加告警日志
+
+## 1.3.0
+
+### 修复
+- SPA 流式渲染页面（如 build.nvidia.com）触发翻译"没反应"：此类页面从打开到内容可见需要数秒到数十秒（水合完成前 DOM 里有文本但全部不可见），旧逻辑触发时一次性收集文本，收不到就静默退出。现触发时若无可翻译内容会保持翻译态等待页面首波内容出现后自动开始翻译（最长 15 秒），等待期在页面面板与 popup 明确提示"等待页面内容加载…"，超时则提示"未找到可翻译内容"而非无反馈
+- 排除规则误杀正文：裸 `header`/`footer`/`nav` 选择器会命中卡片、手风琴等组件内部的语义标签（实测 build.nvidia.com 40+ 个 FAQ/步骤内容块被跳过），改为结构化判断——仅当不在 `main`/`article`/`section` 等正文容器内时才视为站点装饰；`[role=…]` 规则保留
+- `[class*="ad-"]` 会命中 `download-`/`read-` 等类名，收紧为类名 token 以 `ad-`/`ads-` 开头
+
+### 功能
+- 动态补翻：翻译会话期间常驻 MutationObserver 监听新增节点，防抖 1.2s 后增量重扫（已翻译块自动跳过、不会重复翻译）。滚动懒加载、SPA 路由内更新、水合晚到的内容都会自动补翻，与 TWP/沉浸式翻译的成熟做法对齐
+- popup 同步展示等待/提示信息（跟随沉浸式进度消息）
+
+### 全文翻译排除策略（对标友商）
+- 代码块一律不翻：原逻辑依赖 language class 标注，无标注的代码块（如 GitHub blob）照样被翻译。现 PRE/CODE/SAMP/KBD/VAR/TT 内容整体跳过，行内 `code`（如句中的 `npm run dev`）也保持原样
+- 标识符/文件名启发式：纯小写单词（src、docs）、带扩展名（README.md、package.json）、路径（src/lib）、snake_case/kebab-case/camelCase、全大写常量（LICENSE）等独立短块不再翻译——任何站点的目录文件列表通用，不限于 GitHub
+- 数据网格语义排除：`[role="grid"]`（GitHub 目录列表正是该语义）内的内容跳过
+- GitHub 代码视图容器：`.react-code-lines`/`.blob-code`/`.blob-wrapper`
+- 网页内嵌代码编辑器：`.CodeMirror`/`.cm-editor`/`.monaco-editor`（渲染产物为 span 碎片，翻译必乱）
+- 图标字体：`.material-icons`/`.material-symbols-outlined`（连字文字被"翻译"会变成乱码）
+- W3C/Google 标准机制：`translate="no"` 属性与 `notranslate` class 的区域不再翻译（Google 翻译、TWP、沉浸式翻译均遵循该约定）
+
+### 划词翻译
+- iframe 内划词无反应：content script 原本只注入主 frame，iframe 内的 mouseup 不会冒泡到父文档。现注入所有 frame（all_frames），iframe 内划词由 iframe 自己的 content script 显示翻译 icon；同源 iframe 的全文翻译仍由顶层统一收集，不会出两份译文
+- 键盘选区（Shift+方向键 / Ctrl+A）不出现 icon：新增 selectionchange 兜底监听（300ms 防抖），不依赖 mouseup
+- 页面在捕获阶段拦截 mouseup 导致 icon 不出现：mouseup 改为捕获阶段监听 + selectionchange 兜底双路径
+- 旧内核浏览器（无 Selection.getComposedRanges，Chrome 131 前不存在）划词全挂：调用处加了存在性检查并回退 getRangeAt(0)
+
 ## 1.2.0
 
 ### 修复

@@ -35,7 +35,9 @@ export async function decryptValue(cipher: string): Promise<string> {
     const dec = await subtle!.decrypt({ name: 'AES-GCM', iv }, key, data)
     return new TextDecoder().decode(dec)
   } catch {
-    return cipher // 兼容未加密的旧数据
+    // 旧版明文兼容：解密失败按未加密的明文处理；同时告警便于发现 storage 损坏
+    console.warn('[QT] key 解密失败，按旧版明文兼容使用原始值')
+    return cipher
   }
 }
 

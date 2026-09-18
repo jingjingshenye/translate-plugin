@@ -43,7 +43,7 @@ export function useHistory(): {
   }
 
   function exportList(): string {
-    return items.value
+    return current()
       .map(i => `${i.text}\t${i.translation}`)
       .join('\n')
   }

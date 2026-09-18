@@ -4,10 +4,15 @@
 
 ## 功能
 
-- **划词翻译** — 选中文字出现翻译图标，点击查看翻译和词典释义；译文可朗读（内置 TTS）
+- **划词翻译** — 选中文字出现翻译图标，点击查看翻译和词典释义；译文可朗读（内置 TTS）；支持 iframe 内划词、键盘选区（Shift+方向键 / Ctrl+A）
 - **输入框翻译** — 支持 `<input>`、`<textarea>` 及 Shadow DOM 内选中文字（密码框自动跳过）
 - **弹窗翻译** — 点击插件图标，输入文本翻译
 - **沉浸式翻译** — 整页翻译，双语对照 / 仅译文，可视区域懒加载，独立目标语言，页面语言即目标语言时自动跳过
+  - **SPA 友好** — 页面延迟渲染（水合）时自动等待内容出现再翻；滚动/路由变化自动补翻新内容
+  - **智能排除** — 代码块（pre/code）、文件名与标识符（src、README.md、package.json）、数据网格（GitHub 目录列表）、网页内嵌编辑器、图标字体自动跳过；尊重 `translate="no"` / `notranslate` 标准约定
+  - **强制翻译** — 按住 Alt 悬停高亮任意元素，Alt+点击绕过排除规则翻译它
+  - **失败段重试** — 免费源限流自动退避重试，仍有失败时面板一键重试
+  - **快捷键** — Alt+Shift+T 全文翻译 / 取消；右键菜单「全文翻译整个页面」
 - **AI 对照翻译** — 划词时并行请求已配置 Key 的 AI 源，独立显示一份对照译文（自动选源/指定/关闭）
 - **20+ 翻译源**
   - 免费：Microsoft（Edge 免认证端点）/ 腾讯 / 火山 / 百度 / DeepL Free / Google
@@ -26,7 +31,7 @@
 
 ### 从 Release 下载
 
-1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载 `quick-translate-v1.2.0.zip`
+1. 从 [Releases](https://github.com/jingjingshenye/translate-plugin/releases) 下载最新版 `quick-translate-v*.zip`
 2. 解压
 3. Chrome 打开 `chrome://extensions/`
 4. 开启「开发者模式」→「加载已解压的扩展程序」→ 选择 `extension` 文件夹
@@ -95,33 +100,28 @@ npm run build
 
 | 分类 | 选择器 |
 |------|--------|
-| 页面结构 | `nav`, `header`, `footer`, `[role="navigation"]`, `[role="banner"]`, `[role="contentinfo"]` |
+| 标准约定 | `[translate="no"]`, `.notranslate`（W3C/Google 标准，网站作者声明不翻译的区域） |
+| 页面结构 | `[role="navigation"]`, `[role="banner"]`, `[role="contentinfo"]`（页面骨架位置的 header/footer/nav 由结构化判断排除） |
+| 数据网格 | `[role="grid"]`（数据网格语义，如 GitHub 目录文件列表） |
 | 侧边栏 | `.sidebar`, `.side-bar`, `#sidebar` |
-| 广告 | `.ad`, `.ads`, `.advert`, `[class*="ad-"]`, `[class*="ads-"]`, `[id*="google_ads"]`, `[id*="carbonads"]` |
+| 广告 | `.ad`, `.ads`, `.advert`, `[class^="ad-"]`, `[class*=" ad-"]`, `[class^="ads-"]`, `[class*=" ads-"]`, `[id*="google_ads"]`, `[id*="carbonads"]` |
 | 评论区 | `.comments`, `#comments`, `.comment-section` |
 | 推荐/社交 | `.related-posts`, `.recommended`, `.social-share`, `.share-buttons` |
 | 订阅/弹窗 | `.newsletter`, `.subscribe-form`, `.cookie-banner`, `.cookie-consent`, `.popup-overlay`, `.modal-overlay` |
+| 代码编辑器 | `.CodeMirror`, `.cm-editor`, `.monaco-editor` |
+| 图标字体 | `.material-icons`, `.material-symbols-outlined`（连字文字被翻译会变乱码） |
 | 其他 | `[aria-hidden="true"]`, `[data-qt]`, `[data-qt-immersive]` |
 
-### 代码块处理
+### 代码与标识符
 
-代码块按语言标记智能区分：
-
-| 类型 | 处理 |
-|------|------|
-| 有编程语言标记（`language-python`、`lang-js` 等） | 跳过，不翻译 |
-| 纯文本标记（`language-text`、`language-plain`、`language-markdown` 等） | 翻译 |
-| 无语言标记的 `<code>` / `<pre>` | 翻译 |
-| 纯符号内容（`{}`、`;`、`++` 等） | 跳过 |
-
-兼容主流语法高亮库（Prism / Highlight.js / Shiki / GitHub），通过以下方式检测语言：
-- CSS class：`language-*`、`lang-*`、`highlight-source-*`、`hljs`
-- HTML 属性：`data-lang`、`data-language`
+- `<pre>`、`<code>`、`<samp>`、`<kbd>`、`<var>` 内容**整体不翻译**（不依赖语言标注），行内代码（如句中的 `npm run dev`）也保持原样
+- **标识符样式短文本**整块跳过：目录/文件名（`src`、`docs`、`README.md`、`package.json`）、路径（`src/lib/utils`）、snake_case / kebab-case / camelCase、全大写常量（`LICENSE`）、常见仓库文件（`Makefile`、`Dockerfile`）
+- 被误排除的内容：按住 **Alt** 悬停高亮元素，**Alt+点击**强制翻译它
 
 ### Shadow DOM / iframe
 
-- **Shadow DOM**：自动遍历 Shadow Root 内的文本节点并翻译，译文通过 Map 引用管理
-- **iframe**：支持同源 iframe 内容翻译（跨域 iframe 因浏览器安全限制无法访问）
+- **Shadow DOM**：自动遍历 Shadow Root 内的文本节点并翻译
+- **iframe**：content script 注入所有 frame——iframe 内可正常划词；跨源 iframe 的正文由各自的 content script 翻译，同源 iframe 由顶层统一收集（不会重复翻译）
 
 ### SPA 兼容
 

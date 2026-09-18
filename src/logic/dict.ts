@@ -182,7 +182,8 @@ export async function localDict(text: string): Promise<DictResult | null> {
 }
 
 // ============================================
-// Bing 词典 — 抓取 HTML 页面解析（对齐 kiss-translator apiMicrosoftDict）
+// Bing 词典 — 抓取 HTML 页面；解析在 offscreen document 完成
+// （MV3 service worker 无 DOMParser，实测 ReferenceError 会让 Bing 数据静默丢失）
 // ============================================
 export async function bingDict(text: string, signal?: AbortSignal): Promise<DictResult | null> {
   const host = 'https://www.bing.com'
@@ -192,85 +193,57 @@ export async function bingDict(text: string, signal?: AbortSignal): Promise<Dict
     const res = await fetch(url, { signal })
     if (!res.ok) return null
     const html = await res.text()
-
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-
-    const word = doc.querySelector('#headword > h1')?.textContent?.trim()
-    if (!word) return null
-
-    // 基本释义 (trs)
-    const definitions: DictResult['definitions'] = []
-    doc.querySelectorAll('div.qdef > ul > li').forEach(li => {
-      const pos = li.querySelector('.pos')?.textContent?.trim() || ''
-      const def = li.querySelector('.def')?.textContent?.trim() || ''
-      if (def) definitions.push({ pos, def })
-    })
-
-    // 时态变形 (presents)
-    const presents: string[] = []
-    doc.querySelectorAll('div.hd_div1>.hd_if>.p1-5').forEach(li => {
-      const p = li.textContent?.trim()
-      if (p) presents.push(p)
-    })
-
-    // 英汉双解 (ecs)
-    const ecs: DictResult['ecs'] = []
-    doc.querySelectorAll('.each_seg>.li_pos').forEach(li => {
-      const pos = li.querySelector('.pos_lin>.pos')?.textContent?.trim() || ''
-      const lis: string[] = []
-      li.querySelectorAll('.de_seg>.se_lis').forEach(l => {
-        const t = l.querySelector('.de_co')?.textContent?.trim()
-        if (t) lis.push(t)
-      })
-      if (lis.length) ecs.push({ pos, lis })
-    })
-
-    // 例句 (sentences)
-    const sentences: DictResult['sentences'] = []
-    doc.querySelectorAll('#sentenceSeg .se_li').forEach(li => {
-      const en = li.querySelector('.sen_en')?.textContent?.trim() || ''
-      const zh = li.querySelector('.sen_cn')?.textContent?.trim() || ''
-      if (en && zh) sentences.push({ en, zh })
-    })
-
-    // 音标 + 音频 (aus)
-    const phonetic: DictResult['phonetic'] = {}
-    const audio: DictResult['audio'] = {}
-
-    const $audioUK = doc.querySelector('#bigaud_uk') as HTMLElement
-    const $audioUS = doc.querySelector('#bigaud_us') as HTMLElement
-
-    if ($audioUK?.dataset?.mp3link) {
-      audio.uk = host + $audioUK.dataset.mp3link
-      const $phoneticUK = $audioUK.parentElement?.previousElementSibling
-      const m = $phoneticUK?.textContent?.trim()?.match(/\[(.*?)\]/)
-      if (m) phonetic.uk = m[1]
-    }
-    if ($audioUS?.dataset?.mp3link) {
-      audio.us = host + $audioUS.dataset.mp3link
-      const $phoneticUS = $audioUS.parentElement?.previousElementSibling
-      const m = $phoneticUS?.textContent?.trim()?.match(/\[(.*?)\]/)
-      if (m) phonetic.us = m[1]
-    }
-
-    // 备选：从纯文本音标提取
-    if (!phonetic.uk) {
-      const t = doc.querySelector('.hd_pr')?.textContent?.trim()
-      const m = t?.match(/\[(.*?)\]/)
-      if (m) phonetic.uk = m[1]
-    }
-    if (!phonetic.us) {
-      const t = doc.querySelector('.hd_prUS')?.textContent?.trim()
-      const m = t?.match(/\[(.*?)\]/)
-      if (m) phonetic.us = m[1]
-    }
-
-    return { word, phonetic, definitions, sentences, presents, ecs, audio }
+    return await parseBingInOffscreen(html, signal)
   } catch (e: any) {
     if (e.name === 'AbortError') throw e
     return null
   }
+}
+
+// offscreen document 按需创建并常驻（轻量页面），解析结果经 runtime 消息往返
+let offscreenEnsured: Promise<void> | null = null
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (!offscreenEnsured) {
+    offscreenEnsured = (async () => {
+      const offscreen = (chrome as any).offscreen
+      if (!offscreen?.createDocument) throw new Error('offscreen API unavailable')
+      if (typeof chrome.runtime.getContexts === 'function') {
+        const ctx = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT' as any] })
+        if (ctx?.length) return
+      }
+      try {
+        await offscreen.createDocument({
+          url: 'offscreen.html',
+          reasons: ['DOM_PARSER'],
+          justification: '解析 Bing 词典 HTML 页面（service worker 无 DOMParser）',
+        })
+      } catch { /* 已存在时 createDocument 会报错，忽略 */ }
+    })()
+    offscreenEnsured.catch(() => { offscreenEnsured = null }) // 失败允许下次重试
+  }
+  return offscreenEnsured
+}
+
+async function parseBingInOffscreen(html: string, signal?: AbortSignal): Promise<DictResult | null> {
+  await ensureOffscreenDocument()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('offscreen parse timeout')), 5000)
+    const onAbort = () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    chrome.runtime.sendMessage({ type: 'qt-parse-bing', html })
+      .then((r: any) => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        if (r?.error) reject(new Error(r.error))
+        else resolve((r?.result as DictResult | null) ?? null)
+      })
+      .catch((e: any) => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        reject(e)
+      })
+  })
 }
 
 // ============================================

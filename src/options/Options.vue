@@ -353,11 +353,11 @@ function download(content: string, name: string, type: string) {
 
         <section class="card">
           <h2>排除选择器</h2>
-          <p class="hint" style="margin-bottom:8px">指定不翻译的区域（每行一个 CSS 选择器）。内置排除：导航栏、广告、评论区、侧边栏等。</p>
+          <p class="hint" style="margin-bottom:8px">指定不翻译的区域（每行一个 CSS 选择器）。内置排除：代码块、文件名/标识符、数据网格、站点骨架、广告、评论区、侧边栏、内嵌编辑器、图标字体，以及 translate="no" / notranslate 标准约定区域。</p>
           <textarea v-model="immersiveExclude" rows="4" placeholder="例如：&#10;.my-sidebar&#10;#ad-container&#10;.code-block" style="width:100%;padding:8px;background:var(--qt-input);border:1px solid rgba(56,189,248,.15);border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;outline:none;color:var(--qt-text)"></textarea>
           <div style="margin-top:8px">
             <div class="hint" style="margin-bottom:4px"><strong>内置排除规则（始终生效）：</strong></div>
-            <div class="hint" style="font-family:monospace;font-size:10px;line-height:1.6;word-break:break-all">nav, header, footer, .sidebar, .ad, .ads, .advert, [class*="ad-"], [id*="google_ads"], .comments, #comments, .related-posts, .social-share, .newsletter, .cookie-banner, .popup-overlay, [role="navigation"], [aria-hidden="true"]</div>
+            <div class="hint" style="font-family:monospace;font-size:10px;line-height:1.6;word-break:break-all">[translate="no"], .notranslate, [role="navigation"], [role="banner"], [role="contentinfo"], [role="grid"], .sidebar, .side-bar, #sidebar, .ad, .ads, .advert, [class^="ad-"], [class*=" ad-"], [id*="google_ads"], .comments, .related-posts, .social-share, .newsletter, .cookie-banner, .popup-overlay, .react-code-lines, .blob-code, .CodeMirror, .cm-editor, .monaco-editor, .material-icons, [aria-hidden="true"]；另含结构化 header/footer/nav 判断与代码标签（pre/code/samp/kbd/var）、文件名标识符启发式</div>
           </div>
         </section>
 
@@ -366,19 +366,23 @@ function download(content: string, name: string, type: string) {
           <div class="source-list">
             <div class="source-item">
               <span class="source-badge local">1</span>
-              <span class="source-detail">打开任意英文网页，点击右下角浮动按钮</span>
+              <span class="source-detail">打开任意英文网页，点击插件图标 → 「全文翻译」tab</span>
             </div>
             <div class="source-item">
               <span class="source-badge local">2</span>
-              <span class="source-detail">选择翻译模式（双语对照 / 仅译文），点击"翻译此页面"</span>
+              <span class="source-detail">点击「翻译可视区域」或「翻译全部」（快捷键 Alt+Shift+T / 右键菜单也可触发）</span>
             </div>
             <div class="source-item">
               <span class="source-badge local">3</span>
-              <span class="source-detail">翻译完成后可随时切换模式、显示/隐藏原文、清除译文</span>
+              <span class="source-detail">页面右下角控制面板可切换模式、显示/隐藏原文、重试失败段、清除译文</span>
+            </div>
+            <div class="source-item">
+              <span class="source-badge local">4</span>
+              <span class="source-detail">按住 Alt 悬停高亮元素，Alt+点击可强制翻译被排除规则跳过的区域</span>
             </div>
             <div class="source-item">
               <span class="source-badge online">推荐</span>
-              <span class="source-detail">整页翻译建议使用免费引擎（Google/微软），速度快且无成本</span>
+              <span class="source-detail">整页翻译建议使用免费引擎（微软/火山等），速度快且无成本</span>
             </div>
           </div>
         </section>

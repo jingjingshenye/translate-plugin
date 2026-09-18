@@ -1,5 +1,7 @@
 import { translateWithFallback, translateBatchWithFallback, customTranslate, getTranslator, aiCompareTranslate, type TranslateResult } from '~/logic/translate'
 import { localDict, lookupDict, onlineLookup, type DictResult } from '~/logic/dict'
+import { decryptKeys } from '~/logic/crypto'
+import { getMeta, isKnownApi } from '~/logic/translators-meta'
 import type { BackgroundMessage } from '~/logic/messages'
 
 chrome.runtime.onInstalled.addListener(() => createContextMenus())
@@ -12,16 +14,71 @@ function createContextMenus() {
     title: '翻译所选文本',
     contexts: ['selection'],
   })
+  chrome.contextMenus.create({
+    id: 'translate-page',
+    title: '全文翻译整个页面',
+    contexts: ['page', 'frame'],
+  })
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'translate-selection' && info.selectionText && tab?.id) {
+  if (!tab?.id) return
+  if (info.menuItemId === 'translate-selection' && info.selectionText) {
     chrome.tabs.sendMessage(tab.id, {
       type: 'translate-text',
       text: info.selectionText,
     }).catch(() => {})
+  } else if (info.menuItemId === 'translate-page') {
+    startImmersive(tab.id, false)
   }
 })
+
+// 快捷键（默认 Alt+Shift+T）：全文翻译 / 再次按下取消（toggle）
+chrome.commands?.onCommand.addListener((command) => {
+  if (command !== 'qt-translate-page') return
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (tab?.id) startImmersive(tab.id, true)
+  }).catch(() => {})
+})
+
+// 从 storage 组装沉浸式翻译 payload（popup 不在场的快捷键/右键菜单入口共用）
+async function buildImmersivePayload(toggle: boolean) {
+  const stored = await chrome.storage.local.get([
+    'qt_immersive_api', 'qt_api', 'qt_api_keys', 'qt_custom_api',
+    'qt_immersive_mode', 'qt_immersive_to', 'qt_to', 'qt_immersive_exclude',
+  ])
+  const keys = await decryptKeys((stored.qt_api_keys as Record<string, string>) || {})
+  const rawApi = (stored.qt_immersive_api as string) || (stored.qt_api as string) || ''
+  const api = isKnownApi(rawApi) ? rawApi : 'microsoft'
+  const isCustom = api === 'custom'
+  const customConfig = isCustom ? stored.qt_custom_api as { url: string; key?: string; model?: string; prompt?: string } | undefined : undefined
+  if (!isCustom && getMeta(api).needKey && !keys[api]) {
+    throw new Error(`${getMeta(api).name} 需要先在设置中配置 API Key`)
+  }
+  const exclude = typeof stored.qt_immersive_exclude === 'string'
+    ? stored.qt_immersive_exclude.split('\n').map(s => s.trim()).filter(Boolean)
+    : []
+  return {
+    api,
+    apiKey: keys[api],
+    customConfig,
+    mode: (stored.qt_immersive_mode as 'bilingual' | 'translated-only') || 'bilingual',
+    all: true,
+    to: (stored.qt_immersive_to as string) || (stored.qt_to as string) || 'zh',
+    excludeSelectors: exclude,
+    toggle,
+  }
+}
+
+async function startImmersive(tabId: number, toggle: boolean) {
+  try {
+    const payload = await buildImmersivePayload(toggle)
+    await chrome.tabs.sendMessage(tabId, { type: 'qt-immersive-translate', payload })
+  } catch (e) {
+    // 内容脚本未注入（chrome:// 等）或 Key 缺失：控制台可查，不打断用户
+    console.warn('[QT] immersive trigger failed:', e instanceof Error ? e.message : e)
+  }
+}
 
 // ============================================
 // 在途请求管理：content script 取消翻译时真正 abort 网络请求

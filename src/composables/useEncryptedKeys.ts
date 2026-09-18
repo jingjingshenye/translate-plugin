@@ -6,7 +6,19 @@ import { encryptKeys, decryptKeys } from '~/logic/crypto'
 
 const WRITE_DEBOUNCE = 300
 
+// 同一 storage key 复用同一实例：多个组件各自实例化时，独立缓存 + 独立防抖写
+// 会出现旧明文覆盖新写入的竞态（如 popup 中 apiKeys 与 immersiveKeys 同 key）
+const instances = new Map<string, Ref<Record<string, string>>>()
+
 export function useEncryptedKeys(storageKey: string): Ref<Record<string, string>> {
+  const existing = instances.get(storageKey)
+  if (existing) return existing
+  const created = createEncryptedKeys(storageKey)
+  instances.set(storageKey, created)
+  return created
+}
+
+function createEncryptedKeys(storageKey: string): Ref<Record<string, string>> {
   const plain = ref<Record<string, string>>({})
   let syncing = false
   let lastEncrypted = '{}'

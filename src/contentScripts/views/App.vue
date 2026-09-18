@@ -44,9 +44,9 @@ const showLangMenu = ref(false)
 const transFrom = ref('auto')
 const transTo = ref('zh')
 
+// 界面展示用的语言名；划词语言选择器当前只开放这几种
 const langMap: Record<string, string> = {
   'auto': '自动', 'zh': '中文', 'en': 'EN', 'ja': '日本語', 'ko': '한국어',
-  'fr': 'Français', 'de': 'Deutsch', 'es': 'Español', 'ru': 'Русский',
 }
 
 let selectionRect: DOMRect | null = null
@@ -145,6 +145,32 @@ function onMouseUp(event: MouseEvent) {
   }, MOUSEUP_DELAY)
 }
 
+// selectionchange 兜底：键盘选区（Shift+方向键 / Ctrl+A）没有 mouseup；
+// 部分站点在捕获阶段 stopPropagation 会拦截 mouseup，此路径不受影响。
+// 拖选过程中连续触发，靠防抖取尾沿；与 mouseup 路径幂等（重复设置同一 icon）
+let selChangeTimer: ReturnType<typeof setTimeout> | null = null
+function onSelectionChange() {
+  if (isOpen.value) return
+  if (selChangeTimer) clearTimeout(selChangeTimer)
+  selChangeTimer = setTimeout(() => {
+    selChangeTimer = null
+    if (isOpen.value) return
+    // 输入框选区由 mouseup 路径处理（caret 定位需要 event target）
+    const active = document.activeElement
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+    const hit = getComposedSelection()
+    if (!hit) return
+    if (skipLangs.value.includes(detectLang(hit.text))) return
+
+    selectionRect = hit.rect
+    sourceText.value = hit.text
+    iconPos.value = {
+      x: Math.min(hit.rect.right, window.innerWidth - ICON_SIZE),
+      y: Math.min(hit.rect.bottom, window.innerHeight - ICON_SIZE),
+    }
+  }, 300)
+}
+
 function getInputSelection(element: HTMLInputElement | HTMLTextAreaElement | null): { text: string; rect: DOMRect } | null {
   if (!element) return null
   const start = element.selectionStart ?? 0
@@ -164,15 +190,22 @@ function getComposedSelection(): { text: string; rect: DOMRect } | null {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0) return null
 
-  const composedRanges = selection.getComposedRanges()
-  if (!composedRanges || composedRanges.length === 0) return null
-
-  const staticRange = composedRanges[0]
-  if (staticRange.collapsed) return null
-
-  const range = new Range()
-  range.setStart(staticRange.startContainer, staticRange.startOffset)
-  range.setEnd(staticRange.endContainer, staticRange.endOffset)
+  let range: Range
+  const anySel = selection as any
+  if (typeof anySel.getComposedRanges === 'function') {
+    // 跨 shadow DOM 的选区只有 Chrome 131+ 的 getComposedRanges 能拿到；
+    // 旧内核上该方法不存在，直接调用会让所有划词失效
+    const composedRanges = anySel.getComposedRanges()
+    if (!composedRanges || composedRanges.length === 0) return null
+    const staticRange = composedRanges[0]
+    if (staticRange.collapsed) return null
+    range = new Range()
+    range.setStart(staticRange.startContainer, staticRange.startOffset)
+    range.setEnd(staticRange.endContainer, staticRange.endOffset)
+  } else {
+    range = selection.getRangeAt(0)
+    if (range.collapsed) return null
+  }
 
   const text = range.toString().trim()
   if (!text || text.length < 1 || text.length > MAX_SELECTION_LENGTH) return null
@@ -349,15 +382,20 @@ function onDocumentMousedown(event: MouseEvent) {
   }
 }
 
-document.addEventListener('mouseup', onMouseUp)
+// mouseup 用捕获阶段：页面在更深层节点上的 stopPropagation 不影响我们；
+// selectionchange 兜底覆盖键盘选区与被拦截的 mouseup
+document.addEventListener('mouseup', onMouseUp, true)
+document.addEventListener('selectionchange', onSelectionChange)
 document.addEventListener('mousedown', onDocumentMousedown)
 function onKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closePopup() }
 document.addEventListener('keydown', onKeydown)
 
 onUnmounted(() => {
-  document.removeEventListener('mouseup', onMouseUp)
+  document.removeEventListener('mouseup', onMouseUp, true)
+  document.removeEventListener('selectionchange', onSelectionChange)
   document.removeEventListener('mousedown', onDocumentMousedown)
   document.removeEventListener('keydown', onKeydown)
+  if (selChangeTimer) clearTimeout(selChangeTimer)
 })
 </script>
 

@@ -12,6 +12,8 @@ export interface ImmersiveProgressPayload {
   state: 'idle' | 'translating' | 'done'
   progress: { total: number; done: number; failed: number }
   showOriginal: boolean
+  // 等待页面内容 / 未找到可翻译内容 / 语言相同无需翻译 等人读提示；无提示时省略
+  message?: string
 }
 
 // content script / popup / options → background（chrome.runtime.sendMessage）
@@ -26,7 +28,7 @@ export type BackgroundMessage =
 // background / popup → 指定 tab（chrome.tabs.sendMessage）
 export type TabMessage =
   | { type: 'translate-text'; text: string }
-  | { type: 'qt-immersive-translate'; payload: { api: string; apiKey?: string; customConfig?: CustomApiConfig; mode: 'bilingual' | 'translated-only'; all?: boolean; to?: string; excludeSelectors?: string[] } }
+  | { type: 'qt-immersive-translate'; payload: { api: string; apiKey?: string; customConfig?: CustomApiConfig; mode: 'bilingual' | 'translated-only'; all?: boolean; to?: string; excludeSelectors?: string[]; toggle?: boolean } }
   | { type: 'qt-immersive-cancel' }
   | { type: 'qt-immersive-status' }
 

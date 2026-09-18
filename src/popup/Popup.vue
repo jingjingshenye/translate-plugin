@@ -152,6 +152,7 @@ const history = useHistory()
 
 const immersiveState = ref<ImmersiveState>('idle')
 const immersiveProgress = ref({ total: 0, done: 0, failed: 0 })
+const immersiveHint = ref('')
 const immersiveError = ref('')
 let activeTabId = 0
 
@@ -167,6 +168,7 @@ function onImmersiveProgress(msg: any, sender: chrome.runtime.MessageSender) {
     if (activeTabId !== 0 && sender.tab?.id != null && sender.tab.id !== activeTabId) return
     immersiveState.value = msg.payload.state
     immersiveProgress.value = msg.payload.progress
+    immersiveHint.value = msg.payload.message || ''
   }
 }
 
@@ -213,6 +215,7 @@ async function startImmersive(all = false) {
     immersiveState.value = 'translating'
     immersiveProgress.value = { total: 0, done: 0, failed: 0 }
     immersiveError.value = ''
+    immersiveHint.value = ''
   } catch {
     immersiveState.value = 'error'
     immersiveError.value = '无法连接到当前页面（chrome:// 等页面不支持扩展）'
@@ -226,6 +229,7 @@ async function cancelImmersive() {
   }
   immersiveState.value = 'idle'
   immersiveError.value = ''
+  immersiveHint.value = ''
 }
 </script>
 
@@ -344,6 +348,8 @@ async function cancelImmersive() {
         <div class="progress-bar"><div class="progress-fill" :style="{ width: immersivePercent + '%' }"></div></div>
         <div class="progress-text">{{ immersiveProgress.done }} / {{ immersiveProgress.total }}<span v-if="immersiveProgress.failed > 0" class="fail"> · {{ immersiveProgress.failed }}失败</span></div>
       </div>
+
+      <div v-if="immersiveHint" class="immersive-hint">{{ immersiveHint }}</div>
 
       <div v-if="immersiveState === 'error'" class="immersive-err">
         {{ immersiveError || '翻译失败' }}

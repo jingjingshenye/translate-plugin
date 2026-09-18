@@ -106,3 +106,6 @@
   font-size:.9em;
   color:#0ea5e9;
 }
+/* Alt+悬停强制翻译的高亮（全局属性选择器，非插件容器内） */
+[data-qt-force-hover]{outline:2px solid #38bdf8 !important;outline-offset:1px !important;cursor:crosshair !important}
+.qt-force-error{all:initial;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;padding:8px 14px;background:#0a1622;color:#fca5a5;border:1px solid rgba(239,68,68,.4);border-radius:8px;font:12px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3);cursor:pointer}

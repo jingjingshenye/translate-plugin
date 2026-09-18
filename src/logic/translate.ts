@@ -27,7 +27,90 @@ function lang(code: string, api: string): string {
 }
 
 function checkRes(res: Response, api: string) {
+  if (res.status === 429) {
+    // 限流专用错误：携带 Retry-After，上层退避重试而非直接判失败
+    const ra = parseFloat(res.headers.get('retry-after') || '')
+    throw new RateLimitError(api, Number.isFinite(ra) ? ra * 1000 : 0)
+  }
   if (!res.ok) throw new Error(`${api} HTTP ${res.status}`)
+}
+
+// ============================================
+// 引擎限速与 429 退避：免费端点有频率限制，整页翻译的并发批次容易打爆，
+// 超限直接失败会出现大量"失败段"。同引擎请求强制最小间隔，
+// 命中 429 时按 Retry-After / 指数退避重试（AbortSignal 贯穿所有等待）
+// ============================================
+
+class RateLimitError extends Error {
+  retryAfterMs: number
+  constructor(api: string, retryAfterMs: number) {
+    super(`${api} HTTP 429 (rate limited)`)
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => {
+      clearTimeout(t)
+      reject(new DOMException('aborted', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+const ENGINE_MIN_INTERVAL_MS = 350
+const RATELIMIT_MAX_RETRIES = 2
+const RATELIMIT_BASE_MS = 1200
+const lastReqAt = new Map<string, number>()
+const engineChain = new Map<string, Promise<void>>()
+
+// 占用该引擎的一个请求槽：链式排队保证各调用方顺序读取"上次请求时间"，
+// 真实请求间隔 ≥ ENGINE_MIN_INTERVAL_MS，而不是并发唤醒后同时打出
+async function engineSlot(id: string, signal?: AbortSignal): Promise<void> {
+  const prev = engineChain.get(id) || Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>(r => { release = r })
+  engineChain.set(id, prev.then(() => gate))
+  await prev.catch(() => {})
+  try {
+    const gap = ENGINE_MIN_INTERVAL_MS - (Date.now() - (lastReqAt.get(id) || 0))
+    if (gap > 0) await sleepMs(gap, signal)
+    lastReqAt.set(id, Date.now())
+  } finally {
+    release()
+  }
+}
+
+async function withEngineGuard<T>(id: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+  let attempt = 0
+  for (;;) {
+    await engineSlot(id, signal)
+    try {
+      return await fn()
+    } catch (e) {
+      if (!(e instanceof RateLimitError) || attempt >= RATELIMIT_MAX_RETRIES || signal?.aborted) throw e
+      const backoff = e.retryAfterMs || RATELIMIT_BASE_MS * 2 ** attempt
+      attempt++
+      await sleepMs(backoff, signal)
+    }
+  }
+}
+
+// AI 端点检查：非 2xx 时尽量取 body 中的错误详情（OpenAI/Gemini 等返回 JSON error），
+// 429 抛 RateLimitError 让上层退避重试——直接 res.json() 会把 401/429 变成笼统的解析错误
+async function checkResAi(res: Response, api: string): Promise<void> {
+  if (res.ok) return
+  if (res.status === 429) {
+    const ra = parseFloat(res.headers.get('retry-after') || '')
+    throw new RateLimitError(api, Number.isFinite(ra) ? ra * 1000 : 0)
+  }
+  let detail = ''
+  try {
+    const j = await res.json()
+    detail = String(j?.error?.message || j?.error?.status || j?.message || j?.detail || '')
+  } catch {}
+  throw new Error(`${api} HTTP ${res.status}${detail ? ': ' + detail.slice(0, 100) : ''}`)
 }
 
 // ============================================
@@ -249,7 +332,7 @@ export async function tencentOfficialTranslate(text: string, from: string, to: s
     signal, method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Host': 'tmt.tencentcloudapi.com',
+      // 注意：fetch 禁止设置 Host 头（浏览器按 URL 自动填充），此处无需手动指定
       'X-TC-Action': action,
       'X-TC-Version': version,
       'X-TC-Timestamp': String(timestamp),
@@ -349,6 +432,7 @@ async function openaiCompatibleTranslate(text: string, from: string, to: string,
       stream: false,
     }),
   })
+  await checkResAi(res, 'OpenAI compatible')
   const data = await res.json()
   if (data?.choices?.[0]?.message?.content) return { text: data.choices[0].message.content.trim(), srcLang: from.toUpperCase() }
   throw new Error('OpenAI compatible failed')
@@ -395,6 +479,7 @@ export async function geminiTranslate(text: string, from: string, to: string, ke
       generationConfig: { temperature: 0.3 },
     }),
   })
+  await checkResAi(res, 'Gemini')
   const data = await res.json()
   if (data?.candidates?.[0]?.content?.parts?.[0]?.text) return { text: data.candidates[0].content.parts[0].text.trim(), srcLang: from.toUpperCase() }
   throw new Error('Gemini failed')
@@ -407,11 +492,12 @@ export async function claudeTranslate(text: string, from: string, to: string, ke
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({
       model,
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: aiSystemPrompt(from, to),
       messages: [{ role: 'user', content: text }],
     }),
   })
+  await checkResAi(res, 'Claude')
   const data = await res.json()
   if (data?.content?.[0]?.text) return { text: data.content[0].text.trim(), srcLang: from.toUpperCase() }
   throw new Error('Claude failed')
@@ -423,6 +509,7 @@ export async function deeplTranslate(text: string, from: string, to: string, key
     headers: { 'Content-Type': 'application/json', 'Authorization': 'DeepL-Auth-Key ' + key },
     body: JSON.stringify({ text: [text], target_lang: lang(to, 'deepl'), source_lang: lang(from, 'deepl') }),
   })
+  await checkResAi(res, 'DeepL')
   const data = await res.json()
   if (data?.translations?.[0]?.text) return { text: data.translations[0].text, srcLang: (data.translations[0].detected_source_language || from).toUpperCase() }
   throw new Error('DeepL failed')
@@ -689,10 +776,10 @@ export async function translateText(
   const innerSignal = withTimeout(signal, 30000)
   let result: TranslateResult
   if (apiId === 'custom' && customConfig) {
-    result = await customTranslate(text, from, to, customConfig, innerSignal)
+    result = await withEngineGuard('custom', innerSignal, () => customTranslate(text, from, to, customConfig, innerSignal))
   } else {
     const translator = getTranslator(apiId)
-    result = await translator.translate(text, from, to, apiKey, innerSignal)
+    result = await withEngineGuard(apiId, innerSignal, () => translator.translate(text, from, to, apiKey, innerSignal))
   }
   result.api = apiId
 
@@ -773,7 +860,7 @@ export async function translateWithFallback(
     if (breakerOpen(t.id) || fallbackDisabled.includes(t.id)) continue
     try {
       const innerSignal = withTimeout(signal, 30000)
-      const result = await t.translate(text, from, to, undefined, innerSignal)
+      const result = await withEngineGuard(t.id, innerSignal, () => t.translate(text, from, to, undefined, innerSignal))
       result.api = t.id
       result.viaFallback = true
       noteOk(t.id)
@@ -819,11 +906,13 @@ export async function translateBatchWithFallback(
     try {
       const pendingTexts = pending.map(i => texts[i])
       const inner = withTimeout(signal, 30000)
-      const batch = apiId === 'microsoft'
-        ? await microsoftFreeTranslateBatch(pendingTexts, from, to, inner)
-        : apiId === 'azure'
-          ? await azureTranslateBatch(pendingTexts, from, to, apiKey || '', inner)
-          : await deeplFreeTranslateBatch(pendingTexts, from, to, inner)
+      const batch = await withEngineGuard(apiId, inner, () =>
+        apiId === 'microsoft'
+          ? microsoftFreeTranslateBatch(pendingTexts, from, to, inner)
+          : apiId === 'azure'
+            ? azureTranslateBatch(pendingTexts, from, to, apiKey || '', inner)
+            : deeplFreeTranslateBatch(pendingTexts, from, to, inner)
+      )
       noteOk(apiId)
       pending.forEach((idx, j) => {
         batch[j].api = apiId

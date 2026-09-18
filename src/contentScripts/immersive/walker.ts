@@ -1,3 +1,5 @@
+import { isIdentifierLike } from '~/logic/identifier'
+
 export interface TextBlock {
   id: number
   text: string
@@ -22,19 +24,26 @@ const SKIP_TAGS = new Set([
   'INPUT', 'TEXTAREA', 'SELECT', 'BUTTON',
 ])
 
-const PLAIN_LANG_CODES = new Set([
-  'text', 'plain', 'plaintext', 'txt', 'none', 'null', 'plain-text',
-  'markdown', 'md', 'mdx', 'rst', 'asciidoc', 'asc',
-  'csv', 'log', 'diff',
-])
+// 代码类标签：其内容整体不翻译
+const CODE_TAGS = new Set(['PRE', 'CODE', 'SAMP', 'KBD', 'VAR', 'TT'])
 
 const OBSERVE_ATTR = 'data-qt-immersive-observe'
 
+// header/footer/nav 不再用裸标签排除（SPA 组件库常在卡片/手风琴内用语义 <header>，
+// 会误杀正文），改由 isSiteChrome 做结构化判断；
+// [class*="ad-"] 会命中 download-/read- 等类名，收紧为"类名 token 以 ad-/ads- 开头"；
+// role="grid" 是数据网格语义（如 GitHub 目录文件列表），内容多为标识符不应翻译；
+// .react-code-lines/.blob-code/.blob-wrapper 是 GitHub 代码视图容器（新旧两版）；
+// CodeMirror/cm-editor/monaco-editor 是常见网页内嵌代码编辑器，渲染产物是 span 碎片；
+// material-icons/material-symbols-outlined 是连字图标字体，文字被"翻译"会变乱码；
+// [translate="no"] / .notranslate 是 W3C/Google 标准，主流翻译产品均尊重
 const BUILTIN_EXCLUDES = [
   '[data-qt]', '[data-qt-immersive]',
-  'nav', 'header', 'footer',
+  '[translate="no"]', '.notranslate',
   '.sidebar', '.side-bar', '#sidebar',
-  '.ad', '.ads', '.advert', '[class*="ad-"]', '[class*="ads-"]',
+  '.ad', '.ads', '.advert',
+  '[class^="ad-"]', '[class*=" ad-"]',
+  '[class^="ads-"]', '[class*=" ads-"]',
   '[id*="google_ads"]', '[id*="carbonads"]',
   '.comments', '#comments', '.comment-section',
   '.related-posts', '.recommended',
@@ -43,31 +52,20 @@ const BUILTIN_EXCLUDES = [
   '.cookie-banner', '.cookie-consent',
   '.popup-overlay', '.modal-overlay',
   '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+  '[role="grid"]',
+  '.react-code-lines', '.blob-code', '.blob-wrapper',
+  '.CodeMirror', '.cm-editor', '.monaco-editor',
+  '.material-icons', '.material-symbols-outlined',
   '[aria-hidden="true"]',
 ]
 
-function getCodeLanguage(el: Element): string | null {
-  const codeEl = el.tagName === 'CODE' ? el : el.querySelector('code')
-  const target = codeEl || el
+// 标识符/文件路径检测已提取到 ~/logic/identifier（纯函数，可单测）
 
-  const dataLang = target.getAttribute('data-lang') || target.getAttribute('data-language')
-  if (dataLang) return dataLang.toLowerCase()
-
-  const classes = target.className
-  if (typeof classes === 'string') {
-    const match = classes.match(/(?:highlight-source-|language-|lang-|hljs-?)(\w[\w+#-]*)/i)
-    if (match) return match[1].toLowerCase()
-    if (/\bhljs\b/.test(classes)) return 'unknown'
-  }
-
-  return null
-}
-
-function isCodeBlockLanguage(el: Element): 'programming' | 'plain' | 'none' {
-  const lang = getCodeLanguage(el)
-  if (!lang) return 'none'
-  if (PLAIN_LANG_CODES.has(lang)) return 'plain'
-  return 'programming'
+// header/footer/nav 仅在页面骨架位置（不处于正文容器内）视为站点装饰；
+// 正文容器内的属内容结构（如卡片、手风琴的语义 header），不排除
+function isSiteChrome(el: Element): boolean {
+  const h = el.closest('header, footer, nav')
+  return !!h && !h.closest('main, article, section, [role="main"]')
 }
 
 // 缓存按 Element 粒度：同一元素的多个文本节点共享一次 getComputedStyle/rect 计算
@@ -77,6 +75,7 @@ let foundShadowRoots: ShadowRoot[] = []
 let excludeSelectors: string[] = []
 
 function isExcluded(el: Element): boolean {
+  if (isSiteChrome(el)) return true
   for (const sel of excludeSelectors) {
     try { if (el.closest(sel)) return true } catch {}
   }
@@ -89,7 +88,9 @@ function findBlockAncestor(el: Element): { el: Element; isCode: boolean } | null
 
   let result: { el: Element; isCode: boolean } | null = null
   const tag = el.tagName
-  if (tag === 'PRE' || tag === 'CODE') result = { el, isCode: true }
+  // 代码/终端输入/变量类标签一律不翻（与 TWP、沉浸式翻译的 code 级排除对齐）；
+  // 不再依赖语言标注——绝大多数代码块没有 language class
+  if (CODE_TAGS.has(tag)) result = { el, isCode: true }
   else if (BLOCK_TAGS.has(tag)) result = { el, isCode: false }
   else if (tag === 'A' || tag === 'SPAN') {
     const display = getComputedStyle(el).display
@@ -125,24 +126,20 @@ function isVisible(el: Element): boolean {
   return visible
 }
 
+// OBSERVE/SOURCE 标记说明该块已被本次会话收集过：补扫（MutationObserver 触发的
+// 重收集）时跳过其子树，避免同一内容重复入队；cleanup 时两标记都会被清除
 function shouldSkip(el: Element): boolean {
   if (el.closest('[data-qt-immersive]')) return true
   if (el.closest('[data-qt]')) return true
   if (el.closest('[data-qt-immersive-translated]')) return true
+  if (el.closest(`[${OBSERVE_ATTR}]`)) return true
+  if (el.closest('[data-qt-immersive-source]')) return true
   if (el.hasAttribute('data-qt-immersive-translated')) return true
   return false
 }
 
 function hasWords(text: string): boolean {
   return /[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(text)
-}
-
-function isCodeSyntax(text: string): boolean {
-  const stripped = text.replace(/\s+/g, ' ').trim()
-  if (!stripped) return true
-  if (!/[a-zA-Z]/.test(stripped) && /^[{}\[\]();:,.<>=!&|+\-*/%^~?@#`\\'"_\s]+$/.test(stripped)) return true
-  if (/^[\w.]+\s*$/.test(stripped) && stripped.length <= 3 && !/\s/.test(stripped) && /^[a-z]+$/i.test(stripped)) return false
-  return false
 }
 
 function walkTextNodes(root: Node, onNode: (node: Text) => void) {
@@ -164,11 +161,8 @@ function walkTextNodes(root: Node, onNode: (node: Text) => void) {
     const block = closestBlockAncestor(node)
     if (!block) continue
 
-    if (block.isCode) {
-      const langType = isCodeBlockLanguage(block.el)
-      if (langType === 'programming') continue
-      if (isCodeSyntax(text)) continue
-    }
+    // 代码类标签的内容整体跳过（含行内 code/kbd 等）
+    if (block.isCode) continue
 
     onNode(node)
   }
@@ -213,6 +207,7 @@ function pushBlocks(groups: Map<Element, GroupItem[]>, seen: Set<string>, blocks
   for (const [element, items] of groups) {
     const combined = items.map(i => i.text).join(' ')
     if (combined.length < 2) continue
+    if (isIdentifierLike(combined)) continue
     const key = items[0].isCode ? `code:${combined.toLowerCase()}` : combined.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
@@ -261,6 +256,34 @@ export function unmarkAllObserved() {
   for (const iframe of document.querySelectorAll('iframe')) {
     try { iframe.contentDocument?.querySelectorAll(`[${OBSERVE_ATTR}]`).forEach(el => el.removeAttribute(OBSERVE_ATTR)) } catch {}
   }
+}
+
+// 强制收集：Alt+点击指定元素时绕过排除规则/代码跳过/标识符过滤，
+// 把元素内可见文本整体收集为一个块（由 controller 触发）
+export function collectForceBlock(root: Element): TextBlock | null {
+  ancestorCache = new WeakMap()
+  visibleCache = new WeakMap()
+  excludeSelectors = []
+
+  const items: { text: string; node: Text }[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node: Text | null
+  while ((node = walker.nextNode() as Text | null)) {
+    const parent = node.parentElement
+    if (!parent) continue
+    if (shouldSkip(parent)) continue
+    if (SKIP_TAGS.has(parent.tagName)) continue
+    if (parent.closest('[contenteditable="true"]')) continue
+    if (!isVisible(parent)) continue
+    const text = node.textContent?.trim()
+    if (!text || text.length < 2) continue
+    if (!hasWords(text)) continue
+    items.push({ text, node })
+  }
+  const combined = items.map(i => i.text).join(' ')
+  if (combined.length < 2) return null
+  root.setAttribute(OBSERVE_ATTR, '')
+  return { id: blockId++, text: combined, element: root, node: items[0].node, isCode: false }
 }
 
 export function resetBlockId() {
