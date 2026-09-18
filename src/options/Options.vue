@@ -23,6 +23,17 @@ const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
 const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
 const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
 const hoverTranslate = useStorage<'click' | 'hover'>('qt_hover_translate', 'click')
+const autoSites = useStorage<Record<string, boolean>>('qt_auto_sites', {})
+const autoSiteList = computed(() =>
+  Object.entries(autoSites.value || {})
+    .filter(([, on]) => on)
+    .map(([origin]) => origin)
+    .sort()
+)
+function removeAutoSite(origin: string) {
+  const { [origin]: _removed, ...rest } = autoSites.value
+  autoSites.value = rest
+}
 
 function isFallbackOn(id: string) { return !fallbackList().includes(id) }
 function fallbackList(): string[] {
@@ -368,6 +379,17 @@ function download(content: string, name: string, type: string) {
               <option value="click">Alt + 悬停后点击翻译（默认）</option>
               <option value="hover">Alt + 悬停 0.5 秒自动翻译</option>
             </select>
+          </div>
+          <div class="row" style="align-items:flex-start;flex-direction:column;gap:6px;">
+            <label>自动翻译站点</label>
+            <p class="hint">在弹窗「全文翻译」中勾选「此站点自动翻译」即可添加；以下站点打开页面时自动翻译。</p>
+            <div v-if="autoSiteList.length" style="display:flex;flex-direction:column;gap:4px;width:100%;">
+              <div v-for="origin in autoSiteList" :key="origin" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px;background:var(--qt-input);border-radius:6px;font-size:12px;font-family:monospace;color:var(--qt-text);">
+                <span style="word-break:break-all">{{ origin }}</span>
+                <button class="hint" style="cursor:pointer;border:none;background:none;color:#ef4444;flex-shrink:0" @click="removeAutoSite(origin)">移除</button>
+              </div>
+            </div>
+            <p v-else class="hint">暂无站点（默认关闭，在弹窗中按站点开启）</p>
           </div>
           <div class="row">
             <label>目标语言</label>
