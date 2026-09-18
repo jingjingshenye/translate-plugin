@@ -200,11 +200,12 @@ function download(content: string, name: string, type: string) {
 
         <section class="card">
           <h2>自动备用源（Fallback）</h2>
-          <p class="hint" style="margin-bottom:12px">所选引擎翻译失败时，自动改用勾选的免费源完成翻译（结果旁会标注「备用」）。不想被自动使用的源（如 Google）取消勾选即可。</p>
+          <p class="hint" style="margin-bottom:6px">所选引擎翻译失败时，自动改用勾选的免费源完成翻译（结果旁会标注「备用」）。不想被自动使用的源（如 Google）取消勾选即可。</p>
+          <p class="hint" style="margin-bottom:12px">注意：此列表<b>不影响默认引擎本身</b>——若「默认翻译引擎」选了某个源，它会始终优先使用且不标「备用」。想让划词结果不出现某源，请直接更换默认翻译引擎。</p>
           <div style="display:flex;flex-wrap:wrap;gap:10px 16px;">
             <label v-for="t in FREE_META" :key="t.id" style="display:flex;align-items:center;gap:5px;font-size:13px;color:var(--qt-text);cursor:pointer;">
               <input type="checkbox" :checked="isFallbackOn(t.id)" @change="toggleFallback(t.id)" style="accent-color:#0ea5e9;" />
-              {{ t.name }}
+              {{ t.name }}<span v-if="t.id === api" class="hint" style="margin-left:-2px">（当前默认）</span>
             </label>
           </div>
         </section>
