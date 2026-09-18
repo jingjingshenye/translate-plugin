@@ -1,4 +1,4 @@
-import { collectTextBlocks, collectForceBlock, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
+import { collectTextBlocks, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
 import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal, setTranslationStyle } from './injector'
 import { getMeta } from '~/logic/translators-meta'
 import { detectPageLang } from '~/logic/lang-utils'
@@ -184,7 +184,6 @@ function cleanup() {
   waitingForContent = false
   translateAll = false
   failedIds.clear()
-  clearForceHighlight()
   showOriginal = true
   blockStates.clear()
   blockIndex.clear()
@@ -513,102 +512,4 @@ function initMessageListeners() {
   })
 }
 
-// ============================================
-// 强制翻译：按住 Alt 悬停高亮块级元素，Alt+点击绕过一切排除规则翻译该元素。
-// 悬停即译模式（qt_hover_translate='hover'）下悬停 500ms 自动翻译。
-// 排除规则误杀内容时的逃生通道（对标沉浸式翻译的悬停翻译）
-// ============================================
-const FORCE_ATTR = 'data-qt-force-hover'
-let altDown = false
-let forceEl: Element | null = null
-let hoverMode: 'click' | 'hover' = 'click'
-let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
-function clearForceHighlight() {
-  if (forceEl) { forceEl.removeAttribute(FORCE_ATTR); forceEl = null }
-  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
-}
-
-function onMouseMoveForce(e: MouseEvent) {
-  if (!altDown) { if (forceEl) clearForceHighlight(); return }
-  const hit = document.elementFromPoint(e.clientX, e.clientY)
-  const el = hit?.closest?.('p,h1,h2,h3,h4,h5,h6,li,dd,dt,td,th,blockquote,figcaption,summary,pre,section,article,div,span,a') as Element | null
-  if (!el || el.closest(OWN_NODES_SELECTOR)) { if (forceEl) clearForceHighlight(); return }
-  if (el !== forceEl) {
-    clearForceHighlight()
-    forceEl = el
-    el.setAttribute(FORCE_ATTR, '')
-    if (hoverMode === 'hover') {
-      hoverTimer = setTimeout(() => {
-        hoverTimer = null
-        if (altDown && forceEl === el) forceTranslateElement(el)
-      }, 500)
-    }
-  }
-}
-
-async function onAltClickForce(e: MouseEvent) {
-  if (!altDown || !forceEl) return
-  const el = forceEl
-  if (el.closest('[data-qt],[data-qt-immersive]')) return
-  e.preventDefault()
-  e.stopPropagation()
-  forceTranslateElement(el)
-}
-
-async function forceTranslateElement(el: Element) {
-  clearForceHighlight()
-  const block = collectForceBlock(el)
-  if (!block) return
-  markSourceBlock(block.id, block.element)
-  const api = lastPayload?.api || 'microsoft'
-  const apiKey = lastPayload?.apiKey
-  const customConfig = lastPayload?.customConfig
-  const to = targetLang
-  try {
-    const res = await new Promise<{ results: (any | null)[] }>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('timeout')), 60000)
-      chrome.runtime.sendMessage({
-        type: 'qt-batch-translate',
-        payload: { texts: [block.text], from: 'auto', to, api, apiKey, customConfig, sessionId },
-      }).then(r => { clearTimeout(timeout); resolve(r) }).catch(reject)
-    })
-    const text = res?.results?.[0]?.text
-    if (text) {
-      injectTranslation(block.id, text, mode, false)
-    } else {
-      showForceError(el, '翻译失败：引擎未返回结果')
-    }
-  } catch (e) {
-    showForceError(el, '强制翻译失败：' + (e instanceof Error ? e.message : String(e)))
-  }
-}
-
-// 强制翻译失败反馈：在元素后内联一条可关闭的红色提示，10 秒后自动消失
-function showForceError(el: Element, message: string) {
-  const tip = document.createElement('div')
-  tip.setAttribute('data-qt-immersive', '')
-  tip.className = 'qt-force-error'
-  tip.textContent = message
-  const remove = () => { tip.remove(); clearTimeout(timer) }
-  const timer = setTimeout(remove, 10000)
-  tip.onclick = remove
-  ;(el.parentElement || el).appendChild(tip)
-}
-
-function onKeyForce(e: KeyboardEvent, down: boolean) {
-  if (e.key !== 'Alt') return
-  altDown = down
-  if (down) {
-    // 悬停模式设置可能中途修改，按下时读取最新值
-    chrome.storage.local.get('qt_hover_translate').then(v => {
-      hoverMode = v.qt_hover_translate === 'hover' ? 'hover' : 'click'
-    }).catch(() => {})
-  } else {
-    clearForceHighlight()
-  }
-}
-window.addEventListener('mousemove', onMouseMoveForce, true)
-window.addEventListener('click', onAltClickForce, true)
-window.addEventListener('keydown', e => onKeyForce(e, true), true)
-window.addEventListener('keyup', e => onKeyForce(e, false), true)

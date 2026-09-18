@@ -22,7 +22,6 @@ const fallbackDisabled = useStorage<string[]>('qt_fallback_disabled', [])
 const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
 const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
 const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
-const hoverTranslate = useStorage<'click' | 'hover'>('qt_hover_translate', 'click')
 const autoSites = useStorage<Record<string, boolean>>('qt_auto_sites', {})
 const autoSiteList = computed(() =>
   Object.entries(autoSites.value || {})
@@ -371,13 +370,6 @@ function download(content: string, name: string, type: string) {
               <option value="dashed">虚线标记</option>
               <option value="quote">引用块</option>
               <option value="none">无样式纯文本</option>
-            </select>
-          </div>
-          <div class="row">
-            <label>悬停强制翻译</label>
-            <select v-model="hoverTranslate">
-              <option value="click">Alt + 悬停后点击翻译（默认）</option>
-              <option value="hover">Alt + 悬停 0.5 秒自动翻译</option>
             </select>
           </div>
           <div class="row" style="align-items:flex-start;flex-direction:column;gap:6px;">

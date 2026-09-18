@@ -12,7 +12,7 @@
 .qt-btn-sm:hover{background:rgba(56,189,248,.1)}
 .qt-close{color:var(--qt-text-light);cursor:pointer;font-size:14px;line-height:1;transition:color .15s}
 .qt-close:hover{color:#ef4444}
-.qt-body{padding:8px 12px}
+.qt-body{padding:8px 12px;max-height:308px;overflow-y:auto}
 .qt-label{color:var(--qt-text-light);font-size:10px;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px}
 .qt-label-accent{color:#0ea5e9}
 .qt-source{color:var(--qt-text);font-size:12px;line-height:1.4;max-height:60px;overflow-y:auto;word-break:break-all;margin-bottom:6px}
@@ -109,8 +109,6 @@
   color:#0ea5e9;
 }
 /* Alt+悬停强制翻译的高亮（全局属性选择器，非插件容器内） */
-[data-qt-force-hover]{outline:2px solid #38bdf8 !important;outline-offset:1px !important;cursor:crosshair !important}
-.qt-force-error{all:initial;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;padding:8px 14px;background:#0a1622;color:#fca5a5;border:1px solid rgba(239,68,68,.4);border-radius:8px;font:12px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3);cursor:pointer}
 /* 双语样式变体（会话 payload 下发） */
 .qt-immersive-trans.qt-style-dashed, .qt-immersive-trans-code.qt-style-dashed { background:none; border-bottom:1px dashed rgba(56,189,248,.55); border-radius:0; padding:0 0 1px }
 .qt-immersive-trans.qt-style-quote { background:rgba(56,189,248,.06); border-left:3px solid rgba(56,189,248,.6); border-radius:0 4px 4px 0; padding:4px 10px; margin-top:4px }

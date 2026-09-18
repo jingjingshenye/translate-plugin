@@ -339,6 +339,11 @@ export async function lookupDict(text: string, signal?: AbortSignal): Promise<Di
         if (online.sentences?.length) local.sentences = online.sentences
         if (online.presents?.length) local.presents = online.presents
         if (online.ecs?.length) local.ecs = online.ecs
+        // 本地释义在前，Bing 网络释义（pos"网络"）追加在后，两类信息都不丢
+        if (online.definitions?.length) {
+          const webDefs = online.definitions.filter(d => d.pos === '网络')
+          if (webDefs.length) local.definitions = [...(local.definitions || []), ...webDefs]
+        }
       }
     } catch {}
     return local
