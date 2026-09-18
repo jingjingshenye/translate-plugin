@@ -247,6 +247,16 @@ function onIconClick(event: MouseEvent) {
 // ============================================
 const { words: favWords, toggle: toggleFavFn } = useFavorites()
 const isFaved = computed(() => !!favWords.value[sourceText.value])
+
+// 词典数据来源标签：本地 ECDICT 与在线（Bing/有道）如实区分，不再一律标"本地词典"
+const dictSourceLabel = computed(() => {
+  const s = dictResult.value?.source
+  if (s === 'bing') return 'Bing 词典'
+  if (s === 'youdao') return '有道词典'
+  if (s === 'local+bing') return '本地 + Bing'
+  return '本地词典'
+})
+const hasBingSource = computed(() => (dictResult.value?.source || '').includes('bing'))
 const canFav = computed(() =>
   !!(translatedText.value || dictResult.value?.definitions?.length),
 )
@@ -451,13 +461,15 @@ onUnmounted(() => {
         <div class="qt-source">{{ sourceText }}</div>
 
         <template v-if="isWord && dictResult">
-          <div class="qt-dict-tag"><span class="qt-dict-badge">本地词典</span></div>
-          <div v-if="dictResult.phonetic || dictResult.audio" class="qt-phonetic">
+          <div class="qt-dict-head">
+            <span class="qt-dict-badge">{{ dictSourceLabel }}</span>
+            <a v-if="hasBingSource" class="qt-bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank" @click.stop>Bing ↗</a>
+          </div>
+          <div v-if="dictResult.phonetic?.uk || dictResult.phonetic?.us || dictResult.audio?.uk || dictResult.audio?.us" class="qt-phonetic">
             <span v-if="dictResult.phonetic?.uk" class="qt-phon-item">英 [{{ dictResult.phonetic.uk }}]</span>
             <span v-if="dictResult.phonetic?.us" class="qt-phon-item">美 [{{ dictResult.phonetic.us }}]</span>
             <button v-if="dictResult.audio?.uk" class="qt-audio-btn" @click.stop="playAudio(dictResult.audio.uk!)" title="英音发音">▶英</button>
             <button v-if="dictResult.audio?.us" class="qt-audio-btn" @click.stop="playAudio(dictResult.audio.us!)" title="美音发音">▶美</button>
-            <a class="qt-bing-link" :href="'https://www.bing.com/dict/search?q=' + encodeURIComponent(dictResult.word)" target="_blank" @click.stop>Bing ↗</a>
           </div>
           <div v-if="dictLoading" class="qt-loading"><span class="qt-spinner"></span> 补充词典...</div>
           <div v-if="dictResult.definitions?.length" class="qt-defs">

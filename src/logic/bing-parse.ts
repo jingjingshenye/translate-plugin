@@ -77,5 +77,5 @@ export function parseBingHtml(html: string): DictResult | null {
     if (m) phonetic.us = m[1]
   }
 
-  return { word, phonetic, definitions, sentences, presents, ecs, audio }
+  return { word, phonetic, definitions, sentences, presents, ecs, audio, source: 'bing' }
 }

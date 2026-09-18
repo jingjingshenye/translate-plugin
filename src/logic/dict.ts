@@ -12,6 +12,7 @@ export interface DictResult {
   audio?: { uk?: string; us?: string }
   presents?: string[]      // 时态变形
   ecs?: Array<{ pos: string; lis: string[] }>  // 英汉双解
+  source?: 'local' | 'bing' | 'youdao' | 'local+bing'  // 数据来源（UI 标签用）
 }
 
 type DictEntry = { p?: string; pos?: string; t: string; e?: string; c?: number; tag?: string; l?: string }
@@ -178,6 +179,7 @@ export async function localDict(text: string): Promise<DictResult | null> {
     phonetic,
     definitions: definitions.length ? definitions : [{ pos: entry.pos || '', def: entry.t }],
     presents: presents.length ? presents : undefined,
+    source: 'local',
   }
 }
 
@@ -299,7 +301,7 @@ export async function youdaoDict(text: string, signal?: AbortSignal): Promise<Di
       if (en && zh) sentences.push({ en, zh })
     })
 
-    return { word, phonetic, definitions, sentences }
+    return { word, phonetic, definitions, sentences, source: 'youdao' }
   } catch (e: any) {
     if (e.name === 'AbortError') throw e
     return null
@@ -331,6 +333,7 @@ export async function lookupDict(text: string, signal?: AbortSignal): Promise<Di
         new Promise<null>(resolve => setTimeout(resolve, 2500)),
       ])
       if (online) {
+        local.source = online.source === 'bing' ? 'local+bing' : online.source
         if (online.phonetic) local.phonetic = online.phonetic
         if (online.audio) local.audio = online.audio
         if (online.sentences?.length) local.sentences = online.sentences

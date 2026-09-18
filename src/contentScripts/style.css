@@ -35,6 +35,8 @@
 .qt-bing-link{font-size:10px;color:#0ea5e9;text-decoration:none;margin-left:6px;opacity:.7;transition:opacity .15s}
 .qt-bing-link:hover{opacity:1;text-decoration:underline}
 .qt-dict-tag{margin-bottom:4px}
+.qt-dict-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.qt-dict-head .qt-bing-link{margin-left:auto}
 .qt-dict-badge{font-size:9px;color:#10b981;background:rgba(16,185,129,.1);padding:2px 6px;border-radius:3px;font-weight:600;letter-spacing:.5px}
 .qt-trans-tag{margin-bottom:4px;margin-top:6px}
 .qt-trans-badge{font-size:9px;color:#3b82f6;background:rgba(59,130,246,.1);padding:2px 6px;border-radius:3px;font-weight:600;letter-spacing:.5px}
