@@ -10,8 +10,19 @@ document.head.appendChild(style)
 let uiPromise: Promise<void> | null = null
 let uiContainer: HTMLElement | null = null
 
+// 宿主页面整体替换 DOM（document.write 等）时旧容器已脱离，
+// 此时重置状态重新挂载，避免 UI 静默失联
+function uiAlive(): boolean {
+  return appMounted && !!uiContainer && document.body.contains(uiContainer)
+}
+
 function loadUI(): Promise<void> {
-  if (uiPromise) return uiPromise
+  if (uiPromise && uiAlive()) return uiPromise
+  if (uiContainer && !document.body.contains(uiContainer)) {
+    uiPromise = null
+    uiContainer = null
+    appMounted = false
+  }
   const container = document.createElement('div')
   container.id = __NAME__
   container.setAttribute('data-qt', '')
@@ -58,7 +69,7 @@ if ('requestIdleCallback' in window) {
 // 否则 App 错过这次 mouseup、划词无反应
 document.addEventListener('mouseup', function bootstrap(e: MouseEvent) {
   document.removeEventListener('mouseup', bootstrap)
-  if (appMounted) return
+  if (uiAlive()) return
   if (!ensureBody()) return
   appMounted = true
   loadUI()
@@ -77,6 +88,7 @@ document.addEventListener('mouseup', function bootstrap(e: MouseEvent) {
 window.addEventListener('qt-translate-hover', ((e: CustomEvent<{ text: string; x: number; y: number }>) => {
   const d = e.detail
   if (!d?.text || !document.body) return
+  if (!uiAlive()) { uiPromise = null; uiContainer = null; appMounted = false }
   appMounted = true
   loadUI()
     .then(() => window.dispatchEvent(new CustomEvent('qt-translate-text', { detail: d })))
@@ -89,6 +101,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'translate-text' && msg.text) {
     if (window.self !== window.top) return
     if (!ensureBody()) return
+    if (!uiAlive()) { uiPromise = null; uiContainer = null; appMounted = false }
     appMounted = true
     // mountUI 是同步 mount，loadUI resolve 时 App 的 window 监听已就绪
     loadUI()

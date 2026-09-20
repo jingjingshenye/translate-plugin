@@ -227,6 +227,7 @@ function exitIdle(message = '') {
   progressMessage = message
   removePanel()
   unmarkAllObserved()
+  stopRouteWatch()
   reportProgress()
 }
 
@@ -612,8 +613,10 @@ function hoverBlockAt(x: number, y: number): Element | null {
 // 无键位追踪，不存在 Alt 卡死类问题
 function comboMatch(e: KeyboardEvent): boolean {
   if (hoverKey === 'off') return false
-  if (hoverKey === 'alt+y') return e.altKey && !e.ctrlKey && !e.shiftKey && !e.getModifierState('Control') && (e.key === 'y' || e.key === 'Y')
-  return e.ctrlKey && e.shiftKey && !e.altKey && !e.getModifierState('Alt') && (e.key === 'y' || e.key === 'Y')
+  // e.code（物理键）优先：非 QWERTY 布局下 e.key 会随布局变化
+  const yKey = e.code === 'KeyY' || e.key.toLowerCase() === 'y'
+  if (hoverKey === 'alt+y') return e.altKey && !e.ctrlKey && !e.shiftKey && yKey
+  return e.ctrlKey && e.shiftKey && !e.altKey && yKey
 }
 
 function showHoverIconAtCursor(): void {
@@ -624,7 +627,8 @@ function showHoverIconAtCursor(): void {
   if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.isContentEditable)) return
   const el = hoverBlockAt(lastMousePos.x, lastMousePos.y)
   if (!el) return
-  const block = collectForceBlock(el)
+  // 悬停翻译为强制路径：显式传空数组绕过排除规则（不再隐式改写模块状态）
+  const block = collectForceBlock(el, [])
   if (!block) return
   hoverText = block.text
   const icon = document.createElement('div')
@@ -656,7 +660,9 @@ window.addEventListener('mousemove', (e: MouseEvent) => {
 
 window.addEventListener('keydown', (e: KeyboardEvent) => {
   // 图标已显示时再按 = 收起
-  if (iconEl && e.altKey === (hoverKey === 'alt+y') && e.key.toLowerCase() === 'y') { hideHoverIcon(); return }
+  const yPressed = e.code === 'KeyY' || e.key.toLowerCase() === 'y'
+  const modOk = hoverKey === 'alt+y' ? e.altKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.altKey
+  if (iconEl && yPressed && modOk) { hideHoverIcon(); return }
   if (!hoverIconOn || !comboMatch(e)) return
   showHoverIconAtCursor()
 }, true)

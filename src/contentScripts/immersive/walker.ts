@@ -269,10 +269,9 @@ export function resetBlockId() {
 }
 
 // 悬停翻译用：绕过选择行为，把元素内可见文本整体收集为一个块（弹窗展示，不注入页面）
-export function collectForceBlock(root: Element): TextBlock | null {
+export function collectForceBlock(root: Element, excludeSelectors: string[] = []): TextBlock | null {
   ancestorCache = new WeakMap()
   visibleCache = new WeakMap()
-  excludeSelectors = []
 
   const items: { text: string; node: Text }[] = []
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
