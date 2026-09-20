@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useStorage } from '~/composables/useStorage'
-import { useEncryptedKeys } from '~/composables/useEncryptedKeys'
 import { useFavorites } from '~/composables/useFavorites'
 import { useHistory } from '~/composables/useHistory'
 import { invokeTranslate, invokeLookupDict, invokeAiTranslate, type DictMode } from '~/logic/background-api'
@@ -31,7 +30,6 @@ const fallbackUsed = ref(false)
 const currentApi = useStorage<string>('qt_api', FREE_META[0].id)
 // 已下线引擎（如 microsoft 免费源）的存量配置迁移
 watch(currentApi, (v) => { if (v && !isKnownApi(v)) currentApi.value = FREE_META[0].id })
-const apiKeys = useEncryptedKeys('qt_api_keys')
 const skipLangs = useStorage<string[]>('qt_skip_langs', ['zh'])
 const customApi = useStorage('qt_custom_api', { url: '', key: '', model: 'gpt-4o-mini', prompt: '' })
 const dictMode = useStorage<string>('qt_dict_mode', 'both')
@@ -311,26 +309,19 @@ async function doTranslate(text: string, overrideFrom?: string, overrideTo?: str
       .finally(() => { if (myId === reqId) dictLoading.value = false })
   }
 
-  // Key 缺失检测：词典仍可查，仅翻译被阻止
-  const meta = getMeta(currentApi.value)
   const isCustom = currentApi.value === 'custom'
-  if (!isCustom && meta.needKey && !apiKeys.value[currentApi.value]) {
-    loading.value = false
-    error.value = `${meta.name} 需要配置 API Key（在设置中）`
-    await dictPromise
-    return
-  }
   if (isCustom && !customApi.value.url) {
     loading.value = false
     error.value = '请在设置中配置自定义 API URL'
     await dictPromise
     return
   }
+  // Key 由 background 自行解析（内容脚本环境可能无 crypto.subtle）；
+  // 引擎缺 Key 的友好错误由 background 返回
 
   invokeTranslate({
     text, from: src, to: target,
     api: currentApi.value,
-    apiKey: apiKeys.value[currentApi.value],
     customConfig: isCustom ? customApi.value : undefined,
   })
     .then(result => {

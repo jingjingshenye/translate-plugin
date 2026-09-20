@@ -115,8 +115,10 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-function createPanel(): HTMLElement {
+function createPanel(): HTMLElement | null {
   removePanel()
+  // 个别页面在生命周期边缘会出现 body 为空的瞬间，直接 appendChild 会抛未捕获异常
+  if (!document.body) return null
   const el = document.createElement('div')
   el.id = PANEL_ID
   el.setAttribute('data-qt-immersive', '')
@@ -487,7 +489,8 @@ async function handleTranslate(payload: ImmersivePayload) {
   // 会话标识：取消时 background 据此 abort 在途请求
   sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   resetBlockId()
-  createPanel()
+  if (!createPanel()) { exitIdle(); return }
+  resetBlockId()
   // 先于收集启动：触发时页面还没有内容（SPA 流式水合）时靠它等待首波内容；
   // 正常会话中则负责翻译开始后持续补翻新增内容
   startDomObserver()

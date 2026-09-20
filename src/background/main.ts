@@ -124,6 +124,19 @@ function untrackController(sessionId: string | undefined, ctrl: AbortController)
   if (set.size === 0) activeSessions.delete(sessionId)
 }
 
+// Key 解析：统一从加密存储读取（background 是安全上下文，crypto.subtle 恒可用；
+// 内容脚本环境 crypto.subtle 可能缺失，因此 Key 不由内容脚本解密）
+async function resolveApiKey(api: string): Promise<string> {
+  try {
+    const stored = await chrome.storage.local.get('qt_api_keys')
+    const raw = stored.qt_api_keys as Record<string, string> | undefined
+    const keys = await decryptKeys((raw && typeof raw === 'object' ? raw : {}) as Record<string, string>)
+    return keys[api] || ''
+  } catch {
+    return ''
+  }
+}
+
 // ============================================
 // 消息处理：翻译/词典请求集中到 background
 // - 绕过目标页面 CSP 限制
@@ -132,12 +145,16 @@ function untrackController(sessionId: string | undefined, ctrl: AbortController)
 chrome.runtime.onMessage.addListener((msg: BackgroundMessage, _sender, sendResponse) => {
   if (msg.type === 'qt-translate') {
     const p = msg.payload
-    translateWithFallback(p.text, p.from, p.to, undefined, p.api, p.apiKey, p.customConfig)
-      .then((result: TranslateResult) => sendResponse({ result }))
-      .catch((err: Error) => {
-        console.warn('[QT] translate failed:', err?.message)
-        sendResponse({ error: err?.message || 'translate failed' })
-      })
+    ;(async () => {
+      const apiKey = p.apiKey || (await resolveApiKey(p.api))
+      if (p.customConfig && !p.customConfig.key) p.customConfig.key = await resolveApiKey('custom')
+      const result = await translateWithFallback(p.text, p.from, p.to, undefined, p.api, apiKey, p.customConfig)
+      sendResponse({ result })
+    })().catch((err: Error) => {
+      console.warn('[QT] translate failed:', err?.message)
+      sendResponse({ error: err?.message || 'translate failed' })
+    })
+
     return true // 异步响应
   }
   if (msg.type === 'qt-dict') {
@@ -158,10 +175,12 @@ chrome.runtime.onMessage.addListener((msg: BackgroundMessage, _sender, sendRespo
     const { texts, from, to, api, apiKey, customConfig, sessionId } = msg.payload
     const ctrl = new AbortController()
     trackController(sessionId, ctrl)
-    translateBatchWithFallback(texts, from, to, ctrl.signal, api, apiKey, customConfig)
-      .then((results) => sendResponse({ results }))
-      .catch(() => sendResponse({ results: texts.map(() => null) }))
-      .finally(() => untrackController(sessionId, ctrl))
+    ;(async () => {
+      const resolvedKey = apiKey || (await resolveApiKey(api))
+      if (customConfig && !customConfig.key) customConfig.key = await resolveApiKey('custom')
+      const results = await translateBatchWithFallback(texts, from, to, ctrl.signal, api, resolvedKey, customConfig)
+      sendResponse({ results })
+    })().catch(() => sendResponse({ results: texts.map(() => null) })).finally(() => untrackController(sessionId, ctrl))
     return true
   }
   if (msg.type === 'qt-ai-translate') {
