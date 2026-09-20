@@ -1,7 +1,7 @@
 import { translateWithFallback, translateBatchWithFallback, customTranslate, getTranslator, aiCompareTranslate, type TranslateResult } from '~/logic/translate'
 import { localDict, lookupDict, onlineLookup, type DictResult } from '~/logic/dict'
 import { decryptKeys } from '~/logic/crypto'
-import { getMeta, isKnownApi } from '~/logic/translators-meta'
+import { FREE_META, getMeta, isKnownApi } from '~/logic/translators-meta'
 import type { BackgroundMessage } from '~/logic/messages'
 
 chrome.runtime.onInstalled.addListener(() => createContextMenus())
@@ -46,21 +46,28 @@ async function buildImmersivePayload(toggle: boolean) {
   const stored = await chrome.storage.local.get([
     'qt_immersive_api', 'qt_api', 'qt_api_keys', 'qt_custom_api',
     'qt_immersive_mode', 'qt_immersive_to', 'qt_to', 'qt_immersive_exclude', 'qt_immersive_style',
+    'qt_fallback_disabled',
   ])
   const keys = await decryptKeys((stored.qt_api_keys as Record<string, string>) || {})
   const rawApi = (stored.qt_immersive_api as string) || (stored.qt_api as string) || ''
   let api = isKnownApi(rawApi) ? rawApi : 'microsoft'
   let customConfig = api === 'custom' ? stored.qt_custom_api as { url: string; key?: string; model?: string; prompt?: string } | undefined : undefined
   let apiKey: string | undefined = keys[api]
-  // Key/URL 缺失时降级到默认免费引擎：这些入口没有弹窗 UI，静默失败等于功能消失
+  // Key/URL 缺失时降级到免费引擎：这些入口没有弹窗 UI，静默失败等于功能消失。
+  // 降级目标尊重备用源黑名单（用户明确禁用的引擎不应被降级选中）
+  const fallbackDisabled = Array.isArray(stored.qt_fallback_disabled) ? stored.qt_fallback_disabled as string[] : []
+  const downgradeTarget = (preferred: string) => {
+    if (!fallbackDisabled.includes(preferred)) return preferred
+    return (FREE_META.find(t => !fallbackDisabled.includes(t.id))?.id) || preferred
+  }
   if (api === 'custom' && !customConfig?.url) {
-    console.warn('[QT] 自定义 API 未配置 URL，降级到 microsoft')
-    api = 'microsoft'
+    api = downgradeTarget('microsoft')
+    console.warn(`[QT] 自定义 API 未配置 URL，降级到 ${api}`)
     customConfig = undefined
     apiKey = undefined
   } else if (api !== 'custom' && getMeta(api).needKey && !apiKey) {
-    console.warn(`[QT] ${getMeta(api).name} 未配置 Key，降级到 microsoft`)
-    api = 'microsoft'
+    api = downgradeTarget('microsoft')
+    console.warn(`[QT] ${getMeta(api).name} 未配置 Key，降级到 ${api}`)
     apiKey = undefined
   }
   const exclude = typeof stored.qt_immersive_exclude === 'string'
