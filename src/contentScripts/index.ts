@@ -58,11 +58,15 @@ function requestMountApp() {
 
 // 懒挂载：document_end 时主线程常被页面初始化占用，等空闲再加载 UI 分包；
 // IIFE 单文件打包下无法按需加载 bundle，这里只推迟加载与实例化开销
-if ('requestIdleCallback' in window) {
-  const tick = () => (ensureBody() ? requestMountApp() : setTimeout(tick, 120))
-  requestIdleCallback(tick, { timeout: 2000 })
-} else {
-  setTimeout(requestMountApp, 300)
+// UI 预加载仅顶层 frame：子 frame（广告/嵌入类为主）由首次 mouseup 的
+// bootstrap 按需加载，避免每个 iframe 都解析上百 KB 的 Vue
+if (window.self === window.top) {
+  if ('requestIdleCallback' in window) {
+    const tick = () => (ensureBody() ? requestMountApp() : setTimeout(tick, 120))
+    requestIdleCallback(tick, { timeout: 2000 })
+  } else {
+    setTimeout(requestMountApp, 300)
+  }
 }
 
 // 首次 mouseup 时若尚未挂载：同步挂载后重放本次事件，
