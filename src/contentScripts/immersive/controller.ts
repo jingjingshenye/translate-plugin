@@ -582,13 +582,30 @@ function hideHoverIcon(): void {
   hoverText = null
 }
 
+// 悬停目标：语义块优先；按钮/链接/标签等 UI 元素也常是无法选中
+// 却需要翻译的内容（user-select:none 普遍存在于按钮上）
+const HOVER_SELECTOR = 'p,h1,h2,h3,h4,h5,h6,li,dd,dt,td,th,blockquote,figcaption,summary,button,a,label,code,[role="button"],[role="tab"]'
+function hasDirectWords(el: Element): boolean {
+  for (const n of el.childNodes) {
+    if (n.nodeType === Node.TEXT_NODE && /[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(n.textContent || '')) return true
+  }
+  return false
+}
 function hoverBlockAt(x: number, y: number): Element | null {
   if (typeof document.elementFromPoint !== 'function') return null
   const hit = document.elementFromPoint(x, y)
-  const el = hit?.closest?.('p,h1,h2,h3,h4,h5,h6,li,dd,dt,td,th,blockquote,figcaption,summary,section,article') as Element | null
-  if (!el || el.closest(OWN_NODES_SELECTOR)) return null
-  if (el.closest('input,textarea,select,[contenteditable="true"]')) return null
-  return el
+  if (!hit || hit.closest(OWN_NODES_SELECTOR)) return null
+  if (hit.closest('input,textarea,select,[contenteditable="true"]')) return null
+  const semantic = hit.closest(HOVER_SELECTOR) as Element | null
+  if (semantic) return semantic
+  // 兜底：无语义标签的 div/span 直接包字（自定义按钮、卡片标题等），
+  // 向上最多找 4 层，避免把整个页面容器当成块
+  let el: Element | null = hit
+  for (let i = 0; el && el !== document.body && i < 4; i++) {
+    if (hasDirectWords(el)) return el
+    el = el.parentElement
+  }
+  return null
 }
 
 // 组合键判定：修饰键状态读自事件自身（getModifierState），

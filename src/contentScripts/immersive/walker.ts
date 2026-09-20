@@ -276,12 +276,14 @@ export function collectForceBlock(root: Element): TextBlock | null {
 
   const items: { text: string; node: Text }[] = []
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  // 强制收集路径允许 BUTTON：按钮文案普遍 user-select:none 且常需翻译
+  const forceSkip = new Set([...SKIP_TAGS].filter(t => t !== 'BUTTON'))
   let node: Text | null
   while ((node = walker.nextNode() as Text | null)) {
     const parent = node.parentElement
     if (!parent) continue
     if (shouldSkip(parent)) continue
-    if (SKIP_TAGS.has(parent.tagName)) continue
+    if (forceSkip.has(parent.tagName)) continue
     if (parent.closest('[contenteditable="true"]')) continue
     if (!isVisible(parent)) continue
     const text = node.textContent?.trim()
