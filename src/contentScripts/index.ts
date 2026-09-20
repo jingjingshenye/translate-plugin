@@ -74,11 +74,12 @@ document.addEventListener('mouseup', function bootstrap(e: MouseEvent) {
 
 // 悬停翻译：controller 收集到段落文本后经此事件加载 UI 并打开弹窗翻译。
 // 每个 frame 的 controller 只派发本 frame 的局部事件，无重复弹窗问题
-window.addEventListener('qt-translate-hover', ((e: CustomEvent<string>) => {
-  if (!e.detail || !document.body) return
+window.addEventListener('qt-translate-hover', ((e: CustomEvent<{ text: string; x: number; y: number }>) => {
+  const d = e.detail
+  if (!d?.text || !document.body) return
   appMounted = true
   loadUI()
-    .then(() => window.dispatchEvent(new CustomEvent('qt-translate-text', { detail: e.detail })))
+    .then(() => window.dispatchEvent(new CustomEvent('qt-translate-text', { detail: d })))
     .catch(() => {})
 }) as EventListener)
 

@@ -55,13 +55,22 @@ let selectionRect: DOMRect | null = null
 let reqId = 0 // 防止翻译请求 race
 
 // 右键菜单翻译入口：由 contentScripts/index.ts 转发的 window 事件（保证 App 已挂载）
-window.addEventListener('qt-translate-text', ((e: CustomEvent<string>) => {
-  if (e.detail) {
-    sourceText.value = e.detail
+window.addEventListener('qt-translate-text', ((e: CustomEvent<string | { text: string; x?: number; y?: number }>) => {
+  const d: any = e.detail
+  if (!d) return
+  const text = typeof d === 'string' ? d : d.text
+  if (!text) return
+  if (typeof d === 'object' && typeof d.x === 'number') {
+    // 悬停翻译：在图标位置附近弹出（复用划词定位逻辑，自动防溢出）
+    selectionRect = new DOMRect(d.x, d.y, 0, 0)
+    sourceText.value = text
+    popupPos.value = calculatePopupIndex()
+  } else {
+    sourceText.value = text
     selectionRect = null
     popupPos.value = { x: window.innerWidth - 360, y: 20 }
-    doTranslate(e.detail)
   }
+  doTranslate(text)
 }) as EventListener)
 
 // ============================================

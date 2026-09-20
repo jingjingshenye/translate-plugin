@@ -621,9 +621,11 @@ function showHoverIconAtCursor(): void {
     ev.stopPropagation()
     ev.preventDefault()
     const text = hoverText
+    const px = lastMousePos.x
+    const py = lastMousePos.y
     hideHoverIcon()
     if (!text) return
-    window.dispatchEvent(new CustomEvent('qt-translate-hover', { detail: text }))
+    window.dispatchEvent(new CustomEvent('qt-translate-hover', { detail: { text, x: px, y: py } }))
   })
   document.documentElement.appendChild(icon)
   iconEl = icon
