@@ -22,7 +22,7 @@ const fallbackDisabled = useStorage<string[]>('qt_fallback_disabled', [])
 const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
 const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
 const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
-const hoverSweep = useStorage<'alt' | 'ctrl' | 'shift' | 'off'>('qt_hover_sweep', 'alt')
+const hoverIcon = useStorage<'on' | 'off'>('qt_hover_icon', 'off')
 const autoSites = useStorage<Record<string, boolean>>('qt_auto_sites', {})
 const autoSiteList = computed(() =>
   Object.entries(autoSites.value || {})
@@ -373,6 +373,14 @@ function download(content: string, name: string, type: string) {
               <option value="quote">引用块</option>
               <option value="none">无样式纯文本</option>
             </select>
+          </div>
+
+          <div class="row" style="align-items:flex-start;flex-direction:column;gap:6px;">
+            <label>悬停翻译</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--qt-text);cursor:pointer;">
+              <input type="checkbox" :checked="hoverIcon === 'on'" @change="hoverIcon = hoverIcon === 'on' ? 'off' : 'on'" style="accent-color:#0ea5e9;" />
+              按 Alt 在鼠标处呼出翻译图标，点击后在弹窗中翻译（可用于无法选中文字的区域，默认关闭）
+            </label>
           </div>
           <div class="row" style="align-items:flex-start;flex-direction:column;gap:6px;">
             <label>自动翻译站点</label>

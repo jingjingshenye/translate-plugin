@@ -72,6 +72,16 @@ document.addEventListener('mouseup', function bootstrap(e: MouseEvent) {
     .catch(() => {})
 }, { capture: true })
 
+// 悬停翻译：controller 收集到段落文本后经此事件加载 UI 并打开弹窗翻译。
+// 每个 frame 的 controller 只派发本 frame 的局部事件，无重复弹窗问题
+window.addEventListener('qt-translate-hover', ((e: CustomEvent<string>) => {
+  if (!e.detail || !document.body) return
+  appMounted = true
+  loadUI()
+    .then(() => window.dispatchEvent(new CustomEvent('qt-translate-text', { detail: e.detail })))
+    .catch(() => {})
+}) as EventListener)
+
 // 右键菜单翻译：App 可能尚未挂载，先确保挂载，再经 window 事件转发给它。
 // 消息会广播到 tab 的所有 frame，仅顶层响应，避免 iframe 内重复弹窗
 chrome.runtime.onMessage.addListener((msg) => {
