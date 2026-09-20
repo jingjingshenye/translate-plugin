@@ -268,8 +268,7 @@ export function resetBlockId() {
   blockId = 0
 }
 
-// 悬停翻译用：绕过选择行为，把元素内可见文本整体收集为一个块。
-// 已翻译过的元素（带 OBSERVE/SOURCE 标记）返回 null，避免重复翻译
+// 悬停翻译用：绕过选择行为，把元素内可见文本整体收集为一个块（弹窗展示，不注入页面）
 export function collectForceBlock(root: Element): TextBlock | null {
   ancestorCache = new WeakMap()
   visibleCache = new WeakMap()
@@ -292,6 +291,5 @@ export function collectForceBlock(root: Element): TextBlock | null {
   }
   const combined = items.map(i => i.text).join(' ')
   if (combined.length < 2) return null
-  root.setAttribute(OBSERVE_ATTR, '')
   return { id: blockId++, text: combined, element: root, node: items[0].node, isCode: false }
 }

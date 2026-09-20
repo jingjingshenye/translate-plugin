@@ -605,8 +605,10 @@ function onAltPressShow(): void {
   icon.setAttribute('data-qt-hover-icon', '')
   icon.setAttribute('data-qt-immersive', '')
   icon.textContent = '译'
-  icon.style.left = Math.min(Math.max(2, rect.right - 24), window.innerWidth - 28) + 'px'
-  icon.style.top = Math.max(2, rect.top - 26) + 'px'
+  // 图标出现在鼠标位置（而非块元素角落）：嵌套在大容器里的文字
+  // 按块角落定位会跑到远处甚至屏幕外
+  icon.style.left = Math.min(lastMousePos.x + 10, window.innerWidth - 30) + 'px'
+  icon.style.top = Math.min(lastMousePos.y + 12, window.innerHeight - 30) + 'px'
   icon.addEventListener('click', (ev) => {
     ev.stopPropagation()
     ev.preventDefault()
@@ -628,7 +630,7 @@ window.addEventListener('mousemove', (e: MouseEvent) => {
 window.addEventListener('keydown', (e: KeyboardEvent) => {
   if (!hoverIconOn || e.key !== 'Alt' || e.repeat) return
   onAltPressShow()
-})
+}, true)
 
 // 点击图标以外区域、滚动：隐藏图标，避免位置失效残留
 function onMouseDownHide(e: MouseEvent): void {
