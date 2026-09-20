@@ -566,11 +566,13 @@ function initMessageListeners() {
 
 
 // ============================================
-// 悬停翻译：开启后（qt_hover_icon='on'），按下 Alt 在鼠标位置
-// 呼出翻译图标，点击图标在弹窗中翻译该段（不向页面注入内容，
-// 不影响布局）。不依赖文本选择，user-select:none 也可用。
+// 悬停翻译：开启后（qt_hover_key≠'off'，默认 Alt+Y），鼠标停在段落上
+// 按下组合键，在光标处呼出翻译图标，点击图标在弹窗中翻译该段
+// （不向页面注入内容，不影响布局）。不依赖文本选择，
+// user-select:none 也可用。输入框聚焦时按键不触发，避免干扰打字。
 // ============================================
 let hoverIconOn = false
+let hoverKey: 'alt+y' | 'ctrl+shift+y' | 'off' = 'alt+y'
 let iconEl: HTMLElement | null = null
 let hoverText: string | null = null
 const lastMousePos = { x: -1, y: -1 }
@@ -589,24 +591,30 @@ function hoverBlockAt(x: number, y: number): Element | null {
   return el
 }
 
-// Alt 按下：在鼠标位置呼出图标（块内文本此刻收集，点击图标即用）
-function onAltPressShow(): void {
+// 组合键判定：修饰键状态读自事件自身（getModifierState），
+// 无键位追踪，不存在 Alt 卡死类问题
+function comboMatch(e: KeyboardEvent): boolean {
+  if (hoverKey === 'off') return false
+  if (hoverKey === 'alt+y') return e.altKey && !e.ctrlKey && !e.shiftKey && !e.getModifierState('Control') && (e.key === 'y' || e.key === 'Y')
+  return e.ctrlKey && e.shiftKey && !e.altKey && !e.getModifierState('Alt') && (e.key === 'y' || e.key === 'Y')
+}
+
+function showHoverIconAtCursor(): void {
   hideHoverIcon()
   const sel = getSelection()
   if (sel && !sel.isCollapsed) return // 拖选时不出图标，避免干扰划词
+  const focused = document.activeElement as HTMLElement | null
+  if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.isContentEditable)) return
   const el = hoverBlockAt(lastMousePos.x, lastMousePos.y)
   if (!el) return
   const block = collectForceBlock(el)
   if (!block) return
   hoverText = block.text
-  const rect = el.getBoundingClientRect()
   const icon = document.createElement('div')
   icon.className = 'qt-icon'
   icon.setAttribute('data-qt-hover-icon', '')
   icon.setAttribute('data-qt-immersive', '')
   icon.textContent = '译'
-  // 图标出现在鼠标位置（而非块元素角落）：嵌套在大容器里的文字
-  // 按块角落定位会跑到远处甚至屏幕外
   icon.style.left = Math.min(lastMousePos.x + 10, window.innerWidth - 30) + 'px'
   icon.style.top = Math.min(lastMousePos.y + 12, window.innerHeight - 30) + 'px'
   icon.addEventListener('click', (ev) => {
@@ -621,15 +629,17 @@ function onAltPressShow(): void {
   iconEl = icon
 }
 
-// 光标位置恒定追踪（两次赋值，开销可忽略），Alt 按下时按此定位
+// 光标位置恒定追踪（两次赋值，开销可忽略），组合键按下时按此定位
 window.addEventListener('mousemove', (e: MouseEvent) => {
   lastMousePos.x = e.clientX
   lastMousePos.y = e.clientY
 }, { passive: true })
 
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (!hoverIconOn || e.key !== 'Alt' || e.repeat) return
-  onAltPressShow()
+  // 图标已显示时再按 = 收起
+  if (iconEl && e.altKey === (hoverKey === 'alt+y') && e.key.toLowerCase() === 'y') { hideHoverIcon(); return }
+  if (!hoverIconOn || !comboMatch(e)) return
+  showHoverIconAtCursor()
 }, true)
 
 // 点击图标以外区域、滚动：隐藏图标，避免位置失效残留
@@ -637,15 +647,22 @@ function onMouseDownHide(e: MouseEvent): void {
   if (iconEl && !(e.target as Element)?.closest?.('[data-qt-hover-icon]')) hideHoverIcon()
 }
 function onScrollHide(): void {
-  if (hoverIconOn) hideHoverIcon()
+  if (iconEl) hideHoverIcon()
 }
 document.addEventListener('mousedown', onMouseDownHide, true)
 window.addEventListener('scroll', onScrollHide, { capture: true, passive: true })
 
-chrome.storage.local.get('qt_hover_icon').then(v => { hoverIconOn = v.qt_hover_icon === 'on' }).catch(() => {})
+const HOVER_KEY_VALUES = ['alt+y', 'ctrl+shift+y', 'off']
+chrome.storage.local.get('qt_hover_key').then(v => {
+  const val: unknown = v.qt_hover_key
+  hoverKey = HOVER_KEY_VALUES.includes(val as string) ? val as typeof hoverKey : 'alt+y'
+  hoverIconOn = hoverKey !== 'off'
+}).catch(() => {})
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.qt_hover_icon) {
-    hoverIconOn = changes.qt_hover_icon.newValue === 'on'
+  if (area === 'local' && changes.qt_hover_key) {
+    const val: unknown = changes.qt_hover_key.newValue
+    hoverKey = HOVER_KEY_VALUES.includes(val as string) ? val as typeof hoverKey : 'alt+y'
+    hoverIconOn = hoverKey !== 'off'
     if (!hoverIconOn) hideHoverIcon()
   }
 })
