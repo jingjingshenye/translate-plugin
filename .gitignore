@@ -37,3 +37,5 @@ ecdict.mini.csv
 *.zip
 *.tar.gz
 .tmp-*.cjs
+*.tmp.png
+.tmp-*.png
