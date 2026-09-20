@@ -1,4 +1,4 @@
-import { collectTextBlocks, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
+import { collectTextBlocks, collectForceBlock, unmarkAllObserved, resetBlockId, type TextBlock } from './walker'
 import { injectTranslation, markSourceBlock, removeAllTranslations, toggleOriginal, setTranslationStyle } from './injector'
 import { getMeta } from '~/logic/translators-meta'
 import { detectPageLang } from '~/logic/lang-utils'
@@ -564,3 +564,89 @@ function initMessageListeners() {
 }
 
 
+
+// ============================================
+// 悬停翻译（业界交互）：按住修饰键（默认 Alt）+ 鼠标滑过段落即翻译，
+// 或悬停后按下快捷键。不依赖文本选择（user-select:none 可用），
+// 不修改页面元素样式。修饰键状态直接读自每个鼠标事件本身
+// （getModifierState），不存在键位追踪卡死问题。
+// ============================================
+type HoverKey = 'alt' | 'ctrl' | 'shift' | 'off'
+let hoverSweep: HoverKey = 'alt'
+const lastMousePos = { x: -1, y: -1 }
+const HOVER_KEY_STATE: Record<Exclude<HoverKey, 'off'>, string> = { alt: 'Alt', ctrl: 'Control', shift: 'Shift' }
+const HOVER_KEY_EVENT: Record<Exclude<HoverKey, 'off'>, string> = { alt: 'Alt', ctrl: 'Control', shift: 'Shift' }
+
+function hoverKeyHeld(e: MouseEvent): boolean {
+  if (hoverSweep === 'off') return false
+  return e.getModifierState?.(HOVER_KEY_STATE[hoverSweep]) === true
+}
+
+function hoverBlockTarget(x: number, y: number): Element | null {
+  if (typeof document.elementFromPoint !== 'function') return null
+  const hit = document.elementFromPoint(x, y)
+  const el = hit?.closest?.('p,h1,h2,h3,h4,h5,h6,li,dd,dt,td,th,blockquote,figcaption,summary,section,article') as Element | null
+  if (!el || el.closest(OWN_NODES_SELECTOR)) return null
+  if (el.closest('input,textarea,select,[contenteditable="true"]')) return null
+  return el
+}
+
+async function hoverTranslate(el: Element): Promise<void> {
+  const block = collectForceBlock(el)
+  if (!block) return // 已翻译过（带标记）或无有效文本：静默
+  markSourceBlock(block.id, block.element)
+  const api = lastPayload?.api || 'microsoft'
+  const to = targetLang
+  try {
+    const res = await new Promise<{ results: (any | null)[] }>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('timeout')), 60000)
+      chrome.runtime.sendMessage({
+        type: 'qt-batch-translate',
+        payload: { texts: [block.text], from: 'auto', to, api, apiKey: lastPayload?.apiKey, customConfig: lastPayload?.customConfig, sessionId },
+      }).then(r => { clearTimeout(timeout); resolve(r) }).catch(reject)
+    })
+    const text = res?.results?.[0]?.text
+    if (text) injectTranslation(block.id, text, mode, false)
+  } catch { /* 网络失败静默；再次滑过可重试 */ }
+}
+
+let lastHoverHandled = 0
+function onMouseMoveHover(e: MouseEvent): void {
+  // 恒记录光标位置（悬停后按快捷键的场景要用），开销为两次赋值
+  lastMousePos.x = e.clientX
+  lastMousePos.y = e.clientY
+  if (hoverSweep === 'off') return
+  if (!hoverKeyHeld(e)) return
+  // 高回报率鼠标一秒可触发上千次 mousemove，命中测试限频到 ≤25 次/秒
+  const now = performance.now()
+  if (now - lastHoverHandled < 40) return
+  lastHoverHandled = now
+  const sel = getSelection()
+  if (sel && !sel.isCollapsed) return // 拖选文字过程中不触发
+  const el = hoverBlockTarget(e.clientX, e.clientY)
+  if (el) void hoverTranslate(el) // 已翻译过的元素由 collectForceBlock 返回 null 跳过
+}
+
+// 悬停后按快捷键（鼠标不动）：对光标下的段落立即翻译
+function onKeyDownHover(e: KeyboardEvent): void {
+  if (hoverSweep === 'off') return
+  if (e.key !== HOVER_KEY_EVENT[hoverSweep]) return
+  const sel = getSelection()
+  if (sel && !sel.isCollapsed) return
+  const el = hoverBlockTarget(lastMousePos.x, lastMousePos.y)
+  if (el) void hoverTranslate(el)
+}
+
+window.addEventListener('mousemove', onMouseMoveHover, true)
+window.addEventListener('keydown', onKeyDownHover, true)
+
+chrome.storage.local.get('qt_hover_sweep').then(v => {
+  const val: unknown = v.qt_hover_sweep
+  hoverSweep = (['alt', 'ctrl', 'shift', 'off'] as string[]).includes(val as string) ? val as HoverKey : 'alt'
+}).catch(() => {})
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.qt_hover_sweep) {
+    const v: unknown = changes.qt_hover_sweep.newValue
+    hoverSweep = (['alt', 'ctrl', 'shift', 'off'] as string[]).includes(v as string) ? v as HoverKey : 'alt'
+  }
+})

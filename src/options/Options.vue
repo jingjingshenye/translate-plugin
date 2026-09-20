@@ -22,6 +22,7 @@ const fallbackDisabled = useStorage<string[]>('qt_fallback_disabled', [])
 const selectionAuto = useStorage<boolean>('qt_selection_auto', false)
 const autoSpeak = useStorage<boolean>('qt_auto_speak', false)
 const immersiveStyle = useStorage<'underline' | 'dashed' | 'quote' | 'none'>('qt_immersive_style', 'underline')
+const hoverSweep = useStorage<'alt' | 'ctrl' | 'shift' | 'off'>('qt_hover_sweep', 'alt')
 const autoSites = useStorage<Record<string, boolean>>('qt_auto_sites', {})
 const autoSiteList = computed(() =>
   Object.entries(autoSites.value || {})

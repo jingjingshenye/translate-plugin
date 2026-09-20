@@ -267,3 +267,31 @@ export function unmarkAllObserved() {
 export function resetBlockId() {
   blockId = 0
 }
+
+// 悬停翻译用：绕过选择行为，把元素内可见文本整体收集为一个块。
+// 已翻译过的元素（带 OBSERVE/SOURCE 标记）返回 null，避免重复翻译
+export function collectForceBlock(root: Element): TextBlock | null {
+  ancestorCache = new WeakMap()
+  visibleCache = new WeakMap()
+  excludeSelectors = []
+
+  const items: { text: string; node: Text }[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node: Text | null
+  while ((node = walker.nextNode() as Text | null)) {
+    const parent = node.parentElement
+    if (!parent) continue
+    if (shouldSkip(parent)) continue
+    if (SKIP_TAGS.has(parent.tagName)) continue
+    if (parent.closest('[contenteditable="true"]')) continue
+    if (!isVisible(parent)) continue
+    const text = node.textContent?.trim()
+    if (!text || text.length < 2) continue
+    if (!hasWords(text)) continue
+    items.push({ text, node })
+  }
+  const combined = items.map(i => i.text).join(' ')
+  if (combined.length < 2) return null
+  root.setAttribute(OBSERVE_ATTR, '')
+  return { id: blockId++, text: combined, element: root, node: items[0].node, isCode: false }
+}

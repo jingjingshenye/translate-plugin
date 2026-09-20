@@ -151,6 +151,8 @@ const immersiveCustom = useStorage('qt_custom_api', { url: '', key: '', model: '
 const immersiveExclude = useStorage<string>('qt_immersive_exclude', '')
 const history = useHistory()
 
+// 悬停翻译：按住修饰键滑过段落即翻译（内容脚本经 storage 实时感知）
+const hoverSweep = useStorage<'alt' | 'ctrl' | 'shift' | 'off'>('qt_hover_sweep', 'alt')
 // 自动翻译本站（per-origin 记忆，站点名单存 qt_auto_sites）
 const autoSite = ref(false)
 const autoSiteOrigin = ref('')
@@ -382,6 +384,16 @@ async function toggleAutoSite() {
         <option value="quote">译文样式：引用块</option>
         <option value="none">译文样式：无样式</option>
       </select>
+
+      <div class="auto-site" style="align-items:center;gap:6px;">
+        <span style="flex-shrink:0">悬停翻译：</span>
+        <select v-model="hoverSweep" class="sel" style="flex:1;padding:2px 4px;font-size:11px">
+          <option value="alt">按住 Alt，滑过段落即翻译</option>
+          <option value="ctrl">按住 Ctrl，滑过段落即翻译</option>
+          <option value="shift">按住 Shift，滑过段落即翻译</option>
+          <option value="off">关闭悬停翻译</option>
+        </select>
+      </div>
 
       <label v-if="autoSiteOrigin" class="auto-site" :class="{ busy: autoSiteBusy }">
         <input type="checkbox" v-model="autoSite" @change="toggleAutoSite" />
